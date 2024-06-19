@@ -1,0 +1,87 @@
+---
+title: "EpiAxi_DMR_2024"
+author: "Will Hazzard"
+date: "2024-06-19"
+output: html_document
+---
+Load in the necessary packages. For coducting the DMR analysis, we will use two packes: DSS and methylkit. DSS uses a beta-binomial model to conduct dispersion shrinkage, therefore giving good results with relatively low samples. Methylkit offers a suite of functions for doing DMR analysis, including an alternative model using GLM, and .lots of visualization tools. For all of the analysis, the code will have to be run for each of the contexts: CpG, CHG and CHH.
+
+Samples were prepared using the NewEngland Biolabs Ezymatic Methylseq kits, sequences were run using Illumina4000 HiSeq, and samples were aligned using Bismark after trimming and deduplication. For more information on experiemntal design and other, see the README. 
+
+```{r}
+#installation of packages if necessary
+#if (!require("BiocManager", quietly = TRUE))
+   # install.packages("BiocManager")
+
+#BiocManager::install("DSS")
+#BiocManager::install("bsseq")
+#BiocManager::install("methylKit")
+#BiocManager::install("GenomicRanges", force=TRUE)libr
+#BiocManager::install("BiocParallel")
+
+#load the necessary packages
+library(DSS)
+library(bsseq)
+library(ggplot2)
+library(methylKit)
+library(GenomicRanges)
+library(BiocParallel)
+
+```
+
+We'll start with DSS. This will give us a high quality list of DMRs that we can examine. The main drawback is that the visualization tools are poor if you are not doing a two-sample comparison. 
+
+```{R}
+#set the working directory
+setwd("/fs/scratch/PAS1755/Will/EpiAxi/8_DMR_calling/in_DSS/DSS_Analysis/CpG_Context")
+
+#load in the Analysis tags. THis is a text file that adds sample names and design factors that will be merge with the BSseq object later. AS copy can be found in the github repository. 
+AnalysisTags <- read.delim("AnalysisTagsModelFit.txt", header = FALSE)
+
+#load in the model matrix for doing the multifactor function
+design<- read.csv("model.matrix.csv")
+
+#create a list of files of the CpG context pulled for the DSS analysis
+my_files <- list.files(pattern = "CpG.DSS.txt$")
+my_data <- list()
+```
+
+Now that the object have been created, we will pull data from the indivdual files, and put them into the my_data object
+
+```{r}
+# Getting data from CpG files
+my_data <- lapply(my_files, read.table)
+
+new_col_name <- c("chr", "pos", "N", "X") #create new names
+
+names(my_data) <- gsub("\\.CpG.DSS.txt$", "", my_files) #match the files names between the two objects
+
+my_data <- lapply(my_data, setNames, nm = new_col_name)#change the column names
+
+list<- names(my_data) #list sample names
+
+EpiAxiList<- merge(list, AnalysisTags, by.x = "x", by.y = "V1") #merge the analysis tag names with the data
+
+EpiAxiObj_List <- EpiAxiList[,4] #list with experimental factor
+```
+Now that the objects are made, we will run the analysis itself. First, we will create the BSseq object that will hold the genomic data. Next, we will fit a gneralized liner model to the object based on the experimental design factors. This will tell us how the samples are differntially methylated relative to one another. Then, we will call the DMRs using the model. The final result will be a list of significant DMRs. 
+
+```{r}
+
+mParam = MulticoreParam(workers=28, progressbar=FALSE) # Setting the ammount of parallel resources to be used
+
+
+EpiAxiObj = makeBSseqData(my_data,EpiAxiObj_List) # Creating the BSeq object to use in the analysis
+
+#fitting a model for the experimental design
+DMLfit<- DMLfit.multiFactor(EpiAxiObj,
+                            design=design,
+                            formula=~shoot+variety+location+shoot:variety+shoot:location+variety:location+shoot:variety:location)
+
+#test hypothesis for different effects
+DML_shoot<-DMLtest.multiFactor(DMLfit, coef=2)
+test_1<-callDMR(DML_shoot, p.threshold=0.01)
+write.csv(DML_shoot, "CPG__shoot_Sig_sites_01")
+write.csv(test_1,"CpG_DMRs_Epi_vs_Axi_01_htest.csv")
+
+```
