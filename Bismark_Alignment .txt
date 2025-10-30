@@ -1,0 +1,305 @@
+
+
+
+mkdir 1_Raw 2_Pre_Trim_QC 3_Trimming 4_Post_Trim_QC 5_Alignment 6_Deduplication 7_Methylation 8_DMR_calling
+
+# 1. Copying data
+
+### 
+==========================================================================================================================================
+
+cd 2_Pre_Trim_QC
+# cp ../1_Raw/* .
+ls /fs/scratch/PAS1755/Will/EpiAxi/1_Raw/*R1*gz | sort > list1.txt
+ls /fs/scratch/PAS1755/Will/EpiAxi/1_Raw/*R2*gz | sort > list2.txt
+mkdir PreQC_Report
+
+
+
+while IFS= read R1 && IFS= read R2 <&3
+do
+
+ ID1=`echo $R1 | xargs basename | sed -E 's/\.fastq\.gz//'`
+ ID2=`echo $R2 | xargs basename | sed -E 's/\.fastq\.gz//'`
+
+ {
+ echo '#!/bin/bash'
+ echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
+ echo '#SBATCH --job-name=Pre_Trim_QC_PE'
+ echo '#SBATCH --time=00:15:00'
+ echo '#SBATCH --ntasks=28'
+ echo '#SBATCH --exclusive'
+ echo '#SBATCH --account=PAS1755'
+
+echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/2_Pre_Trim_QC'
+echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/fastqc.sif fastqc -t 28 -o PreQC_Report $R1 $R2"
+ } > fastqc_pre_$ID1.sh
+sbatch fastqc_pre_$ID1.sh
+done < list1.txt 3< list2.txt
+
+#######################
+apptainer exec ../Software/multiqc.sif multiqc -s -f --interactive PreQC_Report/
+==========================================================================================================================================
+# 3. Trimming
+cd ..
+cd 3_Trimming
+mkdir BBMapOut
+ls /fs/scratch/PAS1755/Will/EpiAxi/1_Raw/*R1*.gz | sort > list_R1.txt
+ls /fs/scratch/PAS1755/Will/EpiAxi/1_Raw/*R2*.gz | sort > list_R2.txt
+
+
+
+while IFS= read R1 && IFS= read R2 <&3
+do
+ ID1=`echo $R1 | xargs basename | sed -E 's/\.fastq\.gz//'`
+ ID2=`echo $R2 | xargs basename | sed -E 's/\.fastq\.gz//'`
+ {
+ echo '#!/bin/bash'
+ echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
+ echo '#SBATCH --job-name=Trimming_SE'
+ echo '#SBATCH --time=00:05:00'
+ echo '#SBATCH --ntasks=28'
+ echo '#SBATCH --exclusive'
+ echo '#SBATCH --account=PAS1755'
+
+ echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/'
+ echo "../Software/bbmap/bbduk.sh \
+ in1=$R1 \
+ in2=$R2 \
+ out1=BBMapOut/$ID1.fastq.gz \
+ out2=BBMapOut/$ID2.fastq.gz \
+ qtrim=rl trimq=20 ktrim=r k=23 mink=11 hdist=1 tpe tbo tpe t=28 \
+ ref=/fs/scratch/PAS1755/Will/EpiAxi/Software/bbmap/resources/adapters.fa"
+} > trimming_$ID1.sh
+ sbatch trimming_$ID1.sh
+done < list_R1.txt 3< list_R2.txt
+
+==========================================================================================================================================
+ 4. Post Trim QC for EM-seq
+cd ..
+cd 4_Post_Trim_QC
+ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
+ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
+mkdir PostQC_Report
+
+while IFS= read R1 && IFS= read R2 <&3
+do
+ ID1=`echo $R1 | xargs basename | sed -E 's/\.fastq\.gz//'`
+ ID2=`echo $R2 | xargs basename | sed -E 's/\.fastq\.gz//'`
+ {
+ echo '#!/bin/bash'
+ echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
+ echo '#SBATCH --job-name=Post_Trim_QC'
+ echo '#SBATCH --time=00:15:00'
+ echo '#SBATCH --ntasks=28'
+ echo '#SBATCH --exclusive'
+ echo '#SBATCH --account=PAS1755'
+
+echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/3_Post_Trim_QC'
+echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/fastqc.sif \
+ fastqc -t 28 -o PostQC_Report \
+ $R1 $R2"
+ } > fastqc_post_$ID1.sh
+ sbatch fastqc_post_$ID1.sh
+done < list1.txt 3< list2.txt
+
+module load singularity
+# Getting compiled report of QC
+apptainer exec ../Software/multiqc.sif multiqc -s -f --interactive PostQC_Report/
+
+
+##################################
+
+
+# 5. Alignments
+cd /fs/scratch/PAS1755/Will/EpiAxi/5_Alignment
+# Preparing genomes to aling to
+apptainer exec ../Software/bismark.sif bismark_genome_preparation ../Genomes/Almond
+apptainer exec ../Software/bismark.sif bismark_genome_preparation ../Genomes/Lambda
+apptainer exec ../Software/bismark.sif bismark_genome_preparation ../Genomes/pUC19
+------------------------------------------------------------------------------------------------------------------------------------------
+	# 5.1 To almond
+cd ..
+cd 5_Alignment
+mkdir Bismark_Alignment_Almond_Out Bismark_Alignment_Lambda_Out Bismark_Alignment_pUC19_Out
+cd Bismark_Alignment_Almond_Out
+ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
+ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
+
+while IFS= read R1 && IFS= read R2 <&3
+do
+
+ ID1=`echo $R1 | xargs basename | sed -E 's/\.fastq\.gz//'`
+ ID2=`echo $R2 | xargs basename | sed -E 's/\.fastq\.gz//'`
+
+ {
+ echo '#!/bin/bash'
+ echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
+ echo '#SBATCH --job-name=Alignment_Almond'
+ echo '#SBATCH --time=03:00:00'
+ echo '#SBATCH --ntasks=28'
+ echo '#SBATCH --exclusive'
+
+ echo '#SBATCH --account=PAS1755'
+
+ echo 'cd /fs/scratch/PAS1755/Marziye/Will/EpiAxi/3_Alignment/Bismark_Alignment_Almond_Out'
+ echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
+ bismark --genome /fs/scratch/PAS1755/Will/EpiAxi/Genomes/Almond --parallel 28 \
+  -1 $R1 -2 $R2
+"
+ } > bismark_almond_alignment_$ID1.sh
+ sbatch bismark_almond_alignment_$ID1.sh
+done < list1.txt 3< list2.txt
+------------------------------------------------------------------------------------------------------------------------------------------
+	# 5.2 To Lambda
+cd ..
+cd Bismark_Alignment_Lambda_Out
+ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
+ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
+
+while IFS= read R1 && IFS= read R2 <&3
+do
+
+ ID1=`echo $R1 | xargs basename | sed -E 's/\.fastq\.gz//'`
+ ID2=`echo $R2 | xargs basename | sed -E 's/\.fastq\.gz//'`
+
+ {
+ echo '#!/bin/bash'
+ echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
+ echo '#SBATCH --job-name=Alignment_Lambda'
+ echo '#SBATCH --time=00:15:00'
+ echo '#SBATCH --ntasks=28'
+ echo '#SBATCH --exclusive'
+ echo '#SBATCH --mail-type=BEGIN,END,FAIL'
+ echo '#SBATCH --account=PAS1755'
+
+ echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/3_Alignment/Bismark_Alignment_Lambda_Out'
+ echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
+ bismark --genome /fs/scratch/PAS1755/Will/EpiAxi/Genomes/Lambda --parallel 28 \
+  -1 $R1 -2 $R2
+"
+ } > bismark_lambda_alignment_$ID1.sh
+ sbatch bismark_lambda_alignment_$ID1.sh
+done < list1.txt 3< list2.txt
+------------------------------------------------------------------------------------------------------------------------------------------
+	# 5.3 To pUC19
+cd ..
+cd Bismark_Alignment_pUC19_Out
+ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
+ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
+
+while IFS= read R1 && IFS= read R2 <&3
+do
+
+ ID1=`echo $R1 | xargs basename | sed -E 's/\.fastq\.gz//'`
+ ID2=`echo $R2 | xargs basename | sed -E 's/\.fastq\.gz//'`
+
+ {
+ echo '#!/bin/bash'
+ echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
+ echo '#SBATCH --job-name=Alignment_pUC19'
+ echo '#SBATCH --time=00:15:00'
+ echo '#SBATCH --ntasks=28'
+ echo '#SBATCH --exclusive'
+ echo '#SBATCH --mail-type=BEGIN,END,FAIL'
+ echo '#SBATCH --account=PAS1755'
+
+ echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/3_Alignment/Bismark_Alignment_pUC19_Out'
+ echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
+ bismark --genome /fs/scratch/PAS1755/Will/EpiAxi/Genomes/pUC19 --parallel 28 \
+  -1 $R1 -2 $R2
+"
+ } > bismark_pUC19_alignment_$ID1.sh
+ sbatch bismark_pUC19_alignment_$ID1.sh
+done < list1.txt 3< list2.txt
+=====================================================
+
+# 6. Deduplication
+cd ../..
+cd 6_Deduplication
+ls /fs/scratch/PAS1755/Will/EpiAxi/5_Alignment/Bismark_Alignment_Almond_Out/*pe.bam | sort > list.txt
+
+while IFS= read R1
+do
+ ID1=`echo $R1 | xargs basename | sed -E 's/\_S.+_L00._R1_001_bismark_bt2_pe\.bam//'`
+ {
+ echo '#!/bin/bash'
+ echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
+ echo '#SBATCH --job-name=Deduplication'
+ echo '#SBATCH --time=00:10:00'
+ echo '#SBATCH --ntasks=28'
+ echo '#SBATCH --exclusive'
+ echo '#SBATCH --mail-type=BEGIN,END,FAIL'
+ echo '#SBATCH --account=PAS1755'
+
+ echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/5_Alignment/Bismark_Alignment_Almond_Out/'
+ echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
+ deduplicate_bismark $R1 --paired -o $ID1 --output_dir /fs/scratch/PAS1755/Will/EpiAxi/6_Deduplication/"
+} > deduplicate_$ID1.sh
+ sbatch deduplicate_$ID1.sh
+done < list.txt
+=====================================================
+# 7. Methylation calling
+cd ..
+cd 7_Methylation
+ls /fs/scratch/PAS1755/Will/EpiAxi/6_Deduplication/*deduplicated.bam | sort > list_dedup.txt
+
+
+while IFS= read R1
+do
+
+ ID1=`echo $R1 | xargs basename | sed -E 's/\.deduplicated\.bam//'`
+
+ {
+ echo '#!/bin/bash'
+ echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
+ echo '#SBATCH --job-name=Methylation_calling'
+ echo '#SBATCH --time=04:00:00'
+ echo '#SBATCH --ntasks=28'
+ echo '#SBATCH --exclusive'
+ echo '#SBATCH --mail-type=BEGIN,END,FAIL'
+ echo '#SBATCH --account=PAS1755'
+
+ echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/7_Methylation/'
+ echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
+ bismark_methylation_extractor $R1 --comprehensive --multicore 40 --cytosine_report --CX_context \
+    --genome_folder /fs/scratch/PAS1755/Will/EpiAxi/Genomes/Almond"
+} > methylation_extract_$ID1.sh
+ sbatch methylation_extract_$ID1.sh
+done < list_dedup.txt
+------------------------------------------------------------------------------------------------------------------------------------------
+
+ 8 DMR calling
+cd ..
+cd 8_DMR_calling
+mkdir in_DSS in_MethylKit in_MethylPy
+------------------------------------------------------------------------------------------------------------------------------------------
+# Using DSS
+cd in_DSS
+mkdir DSS_Analysis
+ls /fs/scratch/PAS1755/Will/EpiAxi/7_Methylation/*CX_report.txt | sort > list_CX.txt
+
+# Getting files for each context
+while IFS= read R1
+do
+ ID1=`echo $R1 | xargs basename | sed -E 's/_S.+\.deduplicated.CX_report\.txt//'`
+ {
+ echo '#!/bin/bash'
+ echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
+ echo '#SBATCH --job-name=CX_files'
+ echo '#SBATCH --time=00:05:00'
+ echo '#SBATCH --ntasks=1'
+ echo '#SBATCH --exclusive'
+ echo '#SBATCH --mail-type=END,FAIL'
+ echo '#SBATCH --account=PAS1755'
+
+ echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/8_DMR_calling/in_DSS/'
+ echo "awk '{ if(\$6 == \"CG\") {print \$1, \$2, \$4+\$5, \$4}}' $R1 > DSS_Analysis/$ID1.CpG.DSS.txt && \
+ awk '{ if(\$6 == \"CHG\") {print \$1, \$2, \$4+\$5, \$4}}' $R1 > DSS_Analysis/$ID1.CHG.DSS.txt && \
+ awk '{ if(\$6 == \"CHH\") {print \$1, \$2, \$4+\$5, \$4}}' $R1 > DSS_Analysis/$ID1.CHH.DSS.txt"
+} > CX_$ID1.sh
+ sbatch CX_$ID1.sh
+done < list_CX.txt
+------------------------------------------------------------------------------------------------------------------------------------------
+
+
