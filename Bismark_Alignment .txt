@@ -1,6 +1,29 @@
 
+mkdir EpiAxi
+cd EpiAxi
 
+#FASTA files for the alignment genome, Lambda and puc19
+mkdir -p Genomes/Almond Genomes/Lambda Genomes/pUC19
+cp path/to/Almond.fasta
+cp path/to/Lambda.fasta
+cp path/to/pUC19.fasta
 
+==========================================================================================================================================
+### Getting software ###
+mkdir Software
+cd Software
+# Bismark container
+apptainer pull bismark.sif docker://quay.io/biocontainers/bismark:0.23.1--hdfd78af_0
+# fastqc container
+apptainer pull fastqc.sif docker://quay.io/biocontainers/fastqc:0.11.9--hdfd78af_1
+# multiqc container
+apptainer pull multiqc.sif docker://quay.io/biocontainers/multiqc:1.13a--pyhdfd78af_1
+# samtools container
+apptainer pull samtools.sif docker://quay.io/biocontainers/samtools:1.15.1--h6899075_1
+# BBMap binaries
+wget https://downloads.sourceforge.net/project/bbmap/BBMap_38.98.tar.gz -O - | tar -xz
+
+==========================================================================================================================================
 mkdir 1_Raw 2_Pre_Trim_QC 3_Trimming 4_Post_Trim_QC 5_Alignment 6_Deduplication 7_Methylation 8_DMR_calling
 
 # 1. Copying data
@@ -8,10 +31,12 @@ mkdir 1_Raw 2_Pre_Trim_QC 3_Trimming 4_Post_Trim_QC 5_Alignment 6_Deduplication 
 ### 
 ==========================================================================================================================================
 
+#perform pretrim QC on the raw fastq files
+
 cd 2_Pre_Trim_QC
 # cp ../1_Raw/* .
-ls /fs/scratch/PAS1755/Will/EpiAxi/1_Raw/*R1*gz | sort > list1.txt
-ls /fs/scratch/PAS1755/Will/EpiAxi/1_Raw/*R2*gz | sort > list2.txt
+ls /path/to/1_Raw/*R1*gz | sort > list1.txt
+ls /path/to/1_Raw/*R2*gz | sort > list2.txt
 mkdir PreQC_Report
 
 
@@ -24,15 +49,15 @@ do
 
  {
  echo '#!/bin/bash'
- echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
+ echo '#SBATCH -J '
  echo '#SBATCH --job-name=Pre_Trim_QC_PE'
  echo '#SBATCH --time=00:15:00'
  echo '#SBATCH --ntasks=28'
  echo '#SBATCH --exclusive'
- echo '#SBATCH --account=PAS1755'
 
-echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/2_Pre_Trim_QC'
-echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/fastqc.sif fastqc -t 28 -o PreQC_Report $R1 $R2"
+
+echo 'cd /path/to/2_Pre_Trim_QC'
+echo "apptainer exec /path/to/Software/fastqc.sif fastqc -t 28 -o PreQC_Report $R1 $R2"
  } > fastqc_pre_$ID1.sh
 sbatch fastqc_pre_$ID1.sh
 done < list1.txt 3< list2.txt
@@ -40,12 +65,14 @@ done < list1.txt 3< list2.txt
 #######################
 apptainer exec ../Software/multiqc.sif multiqc -s -f --interactive PreQC_Report/
 ==========================================================================================================================================
+#adapter trimming
+
 # 3. Trimming
 cd ..
 cd 3_Trimming
 mkdir BBMapOut
-ls /fs/scratch/PAS1755/Will/EpiAxi/1_Raw/*R1*.gz | sort > list_R1.txt
-ls /fs/scratch/PAS1755/Will/EpiAxi/1_Raw/*R2*.gz | sort > list_R2.txt
+ls /path/to/1_Raw/*R1*.gz | sort > list_R1.txt
+ls /path/to/1_Raw/*R2*.gz | sort > list_R2.txt
 
 
 
@@ -60,26 +87,27 @@ do
  echo '#SBATCH --time=00:05:00'
  echo '#SBATCH --ntasks=28'
  echo '#SBATCH --exclusive'
- echo '#SBATCH --account=PAS1755'
 
- echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/'
+ echo 'cd 1_Raw/3_Trimming/'
  echo "../Software/bbmap/bbduk.sh \
  in1=$R1 \
  in2=$R2 \
  out1=BBMapOut/$ID1.fastq.gz \
  out2=BBMapOut/$ID2.fastq.gz \
  qtrim=rl trimq=20 ktrim=r k=23 mink=11 hdist=1 tpe tbo tpe t=28 \
- ref=/fs/scratch/PAS1755/Will/EpiAxi/Software/bbmap/resources/adapters.fa"
+ ref=../Software/bbmap/resources/adapters.fa"
 } > trimming_$ID1.sh
  sbatch trimming_$ID1.sh
 done < list_R1.txt 3< list_R2.txt
 
 ==========================================================================================================================================
- 4. Post Trim QC for EM-seq
+#perform an additional QC after adapter trimming 
+
+4. Post Trim QC for EM-seq
 cd ..
 cd 4_Post_Trim_QC
-ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
-ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
+ls /path/to/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
+ls /path/to/EpiAxi/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
 mkdir PostQC_Report
 
 while IFS= read R1 && IFS= read R2 <&3
@@ -93,10 +121,9 @@ do
  echo '#SBATCH --time=00:15:00'
  echo '#SBATCH --ntasks=28'
  echo '#SBATCH --exclusive'
- echo '#SBATCH --account=PAS1755'
 
-echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/3_Post_Trim_QC'
-echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/fastqc.sif \
+echo 'cd /path/to/3_Post_Trim_QC'
+echo "apptainer exec /path/to/Software/fastqc.sif \
  fastqc -t 28 -o PostQC_Report \
  $R1 $R2"
  } > fastqc_post_$ID1.sh
@@ -109,10 +136,10 @@ apptainer exec ../Software/multiqc.sif multiqc -s -f --interactive PostQC_Report
 
 
 ##################################
-
+#aligments to Bismark. Genomes must be prepared for Bismark alignment with the appropriate conversions, then alignments must be done for genome of interest, the Lambda and the puc19. 
 
 # 5. Alignments
-cd /fs/scratch/PAS1755/Will/EpiAxi/5_Alignment
+cd /path/to/5_Alignment
 # Preparing genomes to aling to
 apptainer exec ../Software/bismark.sif bismark_genome_preparation ../Genomes/Almond
 apptainer exec ../Software/bismark.sif bismark_genome_preparation ../Genomes/Lambda
@@ -123,8 +150,8 @@ cd ..
 cd 5_Alignment
 mkdir Bismark_Alignment_Almond_Out Bismark_Alignment_Lambda_Out Bismark_Alignment_pUC19_Out
 cd Bismark_Alignment_Almond_Out
-ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
-ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
+ls /path/to/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
+ls /path/to/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
 
 while IFS= read R1 && IFS= read R2 <&3
 do
@@ -140,11 +167,9 @@ do
  echo '#SBATCH --ntasks=28'
  echo '#SBATCH --exclusive'
 
- echo '#SBATCH --account=PAS1755'
-
- echo 'cd /fs/scratch/PAS1755/Marziye/Will/EpiAxi/3_Alignment/Bismark_Alignment_Almond_Out'
- echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
- bismark --genome /fs/scratch/PAS1755/Will/EpiAxi/Genomes/Almond --parallel 28 \
+ echo 'cd /path/to/3_Alignment/Bismark_Alignment_Almond_Out'
+ echo "apptainer exec ../Software/bismark.sif \
+ bismark --genome /path/to/Genomes/Almond --parallel 28 \
   -1 $R1 -2 $R2
 "
  } > bismark_almond_alignment_$ID1.sh
@@ -154,8 +179,8 @@ done < list1.txt 3< list2.txt
 	# 5.2 To Lambda
 cd ..
 cd Bismark_Alignment_Lambda_Out
-ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
-ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
+ls /path/to/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
+ls /path/to/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
 
 while IFS= read R1 && IFS= read R2 <&3
 do
@@ -170,12 +195,10 @@ do
  echo '#SBATCH --time=00:15:00'
  echo '#SBATCH --ntasks=28'
  echo '#SBATCH --exclusive'
- echo '#SBATCH --mail-type=BEGIN,END,FAIL'
- echo '#SBATCH --account=PAS1755'
 
- echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/3_Alignment/Bismark_Alignment_Lambda_Out'
- echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
- bismark --genome /fs/scratch/PAS1755/Will/EpiAxi/Genomes/Lambda --parallel 28 \
+ echo 'cd /path/to/3_Alignment/Bismark_Alignment_Lambda_Out'
+ echo "apptainer exec ../Software/bismark.sif \
+ bismark --genome /path/to/Genomes/Lambda --parallel 28 \
   -1 $R1 -2 $R2
 "
  } > bismark_lambda_alignment_$ID1.sh
@@ -185,8 +208,8 @@ done < list1.txt 3< list2.txt
 	# 5.3 To pUC19
 cd ..
 cd Bismark_Alignment_pUC19_Out
-ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
-ls /fs/scratch/PAS1755/Will/EpiAxi/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
+ls /path/to/3_Trimming/BBMapOut/*R1*gz | sort > list1.txt
+ls /path/to/3_Trimming/BBMapOut/*R2*gz | sort > list2.txt
 
 while IFS= read R1 && IFS= read R2 <&3
 do
@@ -201,8 +224,7 @@ do
  echo '#SBATCH --time=00:15:00'
  echo '#SBATCH --ntasks=28'
  echo '#SBATCH --exclusive'
- echo '#SBATCH --mail-type=BEGIN,END,FAIL'
- echo '#SBATCH --account=PAS1755'
+
 
  echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/3_Alignment/Bismark_Alignment_pUC19_Out'
  echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
