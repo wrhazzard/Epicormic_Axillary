@@ -1,87 +1,2557 @@
 ---
-title: "EpiAxi_DMR_2024"
+title: "EpiAxi_DMR_Caller"
 author: "Will Hazzard"
-date: "2024-06-19"
+date: "2024-08-27"
 output: html_document
 ---
-Load in the necessary packages. For coducting the DMR analysis, we will use two packes: DSS and methylkit. DSS uses a beta-binomial model to conduct dispersion shrinkage, therefore giving good results with relatively low samples. Methylkit offers a suite of functions for doing DMR analysis, including an alternative model using GLM, and .lots of visualization tools. For all of the analysis, the code will have to be run for each of the contexts: CpG, CHG and CHH.
+This markdown provides detailed notes on DMRcaller (Zabet 2024) to visual DNA methylation profiles, call differentially methylated regions, and visualize DNA methylation data, to examine variations in methylations between epicormic tissue in almond (prunus dulcis) and outer canopy tissue. 
 
-Samples were prepared using the NewEngland Biolabs Ezymatic Methylseq kits, sequences were run using Illumina4000 HiSeq, and samples were aligned using Bismark after trimming and deduplication. For more information on experiemntal design and other, see the README. 
-
+First we will load the necessary packages. 
 ```{r}
-#installation of packages if necessary
-#if (!require("BiocManager", quietly = TRUE))
-   # install.packages("BiocManager")
+knitr::opts_knit$set(root.dir = "/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report")
 
-#BiocManager::install("DSS")
-#BiocManager::install("bsseq")
-#BiocManager::install("methylKit")
-#BiocManager::install("GenomicRanges", force=TRUE)libr
-#BiocManager::install("BiocParallel")
 
-#load the necessary packages
-library(DSS)
-library(bsseq)
-library(ggplot2)
-library(methylKit)
+
+#load DMR caller and genomic ranges
+library(DMRcaller)
 library(GenomicRanges)
-library(BiocParallel)
+library(genomation)
+library(plyranges) #this will allow us to tidy up the data, since our short read data aligned to contigs that arent't necessary for this study
+library(dplyr)
 
 ```
 
-We'll start with DSS. This will give us a high quality list of DMRs that we can examine. The main drawback is that the visualization tools are poor if you are not doing a two-sample comparison. 
+Next we will load in the bismark context reports for analysis using DMRcaller. The function readBismarkPool can pool replicates into a single methylation profile. In the experiment, four biological replicates of epicormic and axillary tissue were taken from each of the test sites, for each variety. Therefore, we will pool those result together here. We also split the sample up by variety, primarily to prevent A/T SNPs to be miscaleld a DMRs in the analysis, but also because of memory limitations. 
 
-```{R}
-#set the working directory
-setwd("/fs/scratch/PAS1755/Will/EpiAxi/8_DMR_calling/in_DSS/DSS_Analysis/CpG_Context")
-
-#load in the Analysis tags. THis is a text file that adds sample names and design factors that will be merge with the BSseq object later. AS copy can be found in the github repository. 
-AnalysisTags <- read.delim("AnalysisTagsModelFit.txt", header = FALSE)
-
-#load in the model matrix for doing the multifactor function
-design<- read.csv("model.matrix.csv")
-
-#create a list of files of the CpG context pulled for the DSS analysis
-my_files <- list.files(pattern = "CpG.DSS.txt$")
-my_data <- list()
-```
-
-Now that the object have been created, we will pull data from the indivdual files, and put them into the my_data object
+Chunks will be split of for ease of use.
 
 ```{r}
-# Getting data from CpG files
-my_data <- lapply(my_files, read.table)
+#pooled samples for UCD 8-160
+setwd("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report")
 
-new_col_name <- c("chr", "pos", "N", "X") #create new names
+epicormic.8160.billings<-readBismarkPool(c("1BE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                    "1BE2.deduplicated.CX_report.txt",
+                     "1BE3.deduplicated.CX_report.txt",
+                     "1BE4.deduplicated.CX_report.txt"))
+                    
+epicormic.8160.chico<-readBismarkPool(c("1CE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "1CE2_R1_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "1CE3.deduplicated.CX_report.txt",
+                     "1CE4.deduplicated.CX_report.txt"))
+                    
+epicormic.8160.chowchilla<-readBismarkPool(c("1KE1.deduplicated.CX_report.txt",
+                     "1KE2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "1KE3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "1KE4_R1_bismark_bt2_pe.deduplicated.CX_report.txt"))
+                    
+epicormic.8160.salida<-readBismarkPool(c("1SE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                           "1SE2.deduplicated.CX_report.txt",
+                                           "1SE3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                           "1SE4.deduplicated.CX_report.txt"))
 
-names(my_data) <- gsub("\\.CpG.DSS.txt$", "", my_files) #match the files names between the two objects
+axillary.8160.billings<- readBismarkPool(c("1BA1.deduplicated.CX_report.txt",
+                                           "1BA2.deduplicated.CX_report.txt",
+                                           "1BA3.deduplicated.CX_report.txt",
+                                           "1BA4.deduplicated.CX_report.txt"))
 
-my_data <- lapply(my_data, setNames, nm = new_col_name)#change the column names
+axillary.8160.chico<- readBismarkPool(c("1CA1.deduplicated.CX_report.txt",
+                                        "1CA2.deduplicated.CX_report.txt",
+                                        "1CA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                        "1CA4_R1_bismark_bt2_pe.deduplicated.CX_report.txt"))
 
-list<- names(my_data) #list sample names
+axillary.8160.chowchilla<- readBismarkPool(c( "1KA1_R1_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                              "1KA2_R1_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                              "1KA3.deduplicated.CX_report.txt",
+                                              "1KA4_R1_bismark_bt2_pe.deduplicated.CX_report.txt"))
 
-EpiAxiList<- merge(list, AnalysisTags, by.x = "x", by.y = "V1") #merge the analysis tag names with the data
+axillary.8160.salida<- readBismarkPool(c( "1SA1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                          "1SA2.deduplicated.CX_report.txt",
+                                          "1SA3.deduplicated.CX_report.txt",
+                                          "1SA4_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt"))
 
-EpiAxiObj_List <- EpiAxiList[,4] #list with experimental factor
 ```
-Now that the objects are made, we will run the analysis itself. First, we will create the BSseq object that will hold the genomic data. Next, we will fit a gneralized liner model to the object based on the experimental design factors. This will tell us how the samples are differntially methylated relative to one another. Then, we will call the DMRs using the model. The final result will be a list of significant DMRs. 
+
 
 ```{r}
 
-mParam = MulticoreParam(workers=28, progressbar=FALSE) # Setting the ammount of parallel resources to be used
+setwd("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report")
+
+#pooled samples for UCD 8-201
+
+epicormic.8201.billings<-readBismarkPool(c("2BE1.deduplicated.CX_report.txt",
+                     "2BE2.deduplicated.CX_report.txt",
+                     "2BE3.deduplicated.CX_report.txt",
+                     "2BE4.deduplicated.CX_report.txt"))
+
+epicormic.8201.chico<-readBismarkPool(c("2CE1_R1_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "2CE2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "2CE3.deduplicated.CX_report.txt",
+                     "2CE4.deduplicated.CX_report.txt"))
+                     
+epicormic.8201.chowchilla<-readBismarkPool(c( "2KE1.deduplicated.CX_report.txt",
+                     "2KE2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "2KE3.deduplicated.CX_report.txt",
+                     "2KE4.deduplicated.CX_report.txt"))
+                     
+epicormic.8201.salida<-readBismarkPool(c( "2SE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "2SE2.deduplicated.CX_report.txt",
+                     "2SE3.deduplicated.CX_report.txt",
+                     "2SE4_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt"))
 
 
-EpiAxiObj = makeBSseqData(my_data,EpiAxiObj_List) # Creating the BSeq object to use in the analysis
-
-#fitting a model for the experimental design
-DMLfit<- DMLfit.multiFactor(EpiAxiObj,
-                            design=design,
-                            formula=~shoot+variety+location+shoot:variety+shoot:location+variety:location+shoot:variety:location)
-
-#test hypothesis for different effects
-DML_shoot<-DMLtest.multiFactor(DMLfit, coef=2)
-test_1<-callDMR(DML_shoot, p.threshold=0.01)
-write.csv(DML_shoot, "CPG__shoot_Sig_sites_01")
-write.csv(test_1,"CpG_DMRs_Epi_vs_Axi_01_htest.csv")
+axillary.8201.billings<- readBismarkPool(c("2BA1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2BA2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2BA3.deduplicated.CX_report.txt",
+                                      "2BA4_R1_bismark_bt2_pe.deduplicated.CX_report.txt"))
+                                      
+axillary.8201.chico<- readBismarkPool(c("2CA1.deduplicated.CX_report.txt",
+                                      "2CA2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2CA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt", 
+                                      "2CA4.deduplicated.CX_report.txt"))
+                                      
+axillary.8201.chowchilla<- readBismarkPool(c("2KA1_R1_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2KA2.deduplicated.CX_report.txt",
+                                      "2KA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2KA4_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt"))
+                                      
+axillary.8201.salida<- readBismarkPool(c("2SA1.deduplicated.CX_report.txt",
+                                      "2SA2.deduplicated.CX_report.txt",
+                                      "2SA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2SA4.deduplicated.CX_report.txt"))
 
 ```
+
+Because of the outliers with the Aviti samples, we need to try repooling the samples without the outliers in them. This may still end up causing some imbalancing in the data due to the lack of suffcient replicates in each treatment, however it may eliminate the weird grouping in the PCA and dendrogram and give us more accurate DMRs.
+
+```{r}
+#fixed 8160
+
+setwd("/fs/scratch/PAS1755/Will/EpiAxi/7_Methylation")
+
+
+epicormic.8160.billings<-readBismarkPool(c("1BE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                    "1BE2.deduplicated.CX_report.txt",
+                     "1BE3.deduplicated.CX_report.txt",
+                     "1BE4.deduplicated.CX_report.txt"))
+                    
+epicormic.8160.chico<-readBismarkPool(c("1CE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "1CE3.deduplicated.CX_report.txt"))
+                    
+epicormic.8160.chowchilla<-readBismarkPool(c("1KE1.deduplicated.CX_report.txt",
+                     "1KE2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "1KE4.deduplicated.CX_report.txt"))
+                    
+epicormic.8160.salida<-readBismarkPool(c("1SE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                           "1SE2.deduplicated.CX_report.txt",
+                                           "1SE3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                           "1SE4.deduplicated.CX_report.txt"))
+
+axillary.8160.billings<- readBismarkPool(c("1BA1.deduplicated.CX_report.txt",
+                                           "1BA2.deduplicated.CX_report.txt",
+                                           "1BA3.deduplicated.CX_report.txt",
+                                           "1BA4.deduplicated.CX_report.txt"))
+
+axillary.8160.chico<- readBismarkPool(c("1CA1.deduplicated.CX_report.txt",
+                                        "1CA2.deduplicated.CX_report.txt",
+                                        "1CA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt"))
+
+
+axillary.8160.salida<- readBismarkPool(c( "1SA1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                          "1SA2.deduplicated.CX_report.txt",
+                                          "1SA3.deduplicated.CX_report.txt",
+                                          "1SA4_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt"))
+
+
+
+save(epicormic.8160.billings, epicormic.8160.chico, epicormic.8160.chowchilla, epicormic.8160.salida, axillary.8160.billings, axillary.8160.chico, axillary.8160.salida, file = "/users/PAS1755/whazzard/Epicormic_Axillary/8_160_pooled_samples_fixed.Rdata")
+
+```
+
+```{r}
+#fixed pooled 8-201
+setwd("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report")
+
+
+epicormic.8201.billings<-readBismarkPool(c("2BE1.deduplicated.CX_report.txt",
+                     "2BE2.deduplicated.CX_report.txt",
+                     "2BE3.deduplicated.CX_report.txt",
+                     "2BE4.deduplicated.CX_report.txt"))
+
+epicormic.8201.chico<-readBismarkPool(c("2CE2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "2CE3.deduplicated.CX_report.txt",
+                     "2CE4.deduplicated.CX_report.txt"))
+                     
+epicormic.8201.chowchilla<-readBismarkPool(c( "2KE1.deduplicated.CX_report.txt",
+                     "2KE2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "2KE3.deduplicated.CX_report.txt",
+                     "2KE4.deduplicated.CX_report.txt"))
+                     
+epicormic.8201.salida<-readBismarkPool(c( "2SE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                     "2SE2.deduplicated.CX_report.txt",
+                     "2SE3.deduplicated.CX_report.txt",
+                     "2SE4_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt"))
+
+
+axillary.8201.billings<- readBismarkPool(c("2BA1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2BA2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2BA3.deduplicated.CX_report.txt"))
+                                      
+axillary.8201.chico<- readBismarkPool(c("2CA2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2CA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt", 
+                                      "2CA4.deduplicated.CX_report.txt"))
+                                      
+axillary.8201.chowchilla<- readBismarkPool(c( "2KA2.deduplicated.CX_report.txt",
+                                      "2KA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2KA4_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt"))
+                                      
+axillary.8201.salida<- readBismarkPool(c("2SA1.deduplicated.CX_report.txt",
+                                      "2SA2.deduplicated.CX_report.txt",
+                                      "2SA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt",
+                                      "2SA4.deduplicated.CX_report.txt"))
+
+save(epicormic.8201.salida, epicormic.8201.chowchilla, epicormic.8201.chico, epicormic.8201.billings, axillary.8201.salida, axillary.8201.chowchilla, axillary.8201.chico, axillary.8201.billings, file = "/users/PAS1755/whazzard/Epicormic_Axillary/8_201_pooled_samples_fixed.Rdata")
+
+```
+
+
+
+
+ make them without pooled samples
+```{r}
+
+setwd("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report")
+
+epicormic.160.billings.1 <- readBismark("1BE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.160.billings.2 <- readBismark("1BE2.deduplicated.CX_report.txt")
+epicormic.160.billings.3 <- readBismark("1BE3.deduplicated.CX_report.txt")
+epicormic.160.billings.4 <- readBismark("1BE4.deduplicated.CX_report.txt")
+
+epicormic.160.chico.1<-readBismark("1CE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.160.chico.2<-readBismark("1CE2_R1_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.160.chico.3<-readBismark("1CE3.deduplicated.CX_report.txt")
+epicormic.160.chico.4<-readBismark("1CE4.deduplicated.CX_report.txt")
+
+
+epicormic.160.chowchilla.1<- readBismark("1KE1.deduplicated.CX_report.txt")
+epicormic.160.chowchilla.2<- readBismark("1KE2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.160.chowchilla.3<- readBismark("1KE2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.160.chowchilla.4<- readBismark("1KE4_R1_bismark_bt2_pe.deduplicated.CX_report.txt")
+
+
+epicormic.160.salida.1<-readBismark("1SE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.160.salida.2<-readBismark("1SE2.deduplicated.CX_report.txt")
+epicormic.160.salida.3<-readBismark("1SE3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.160.salida.4<-readBismark("1SE4.deduplicated.CX_report.txt")
+
+save(epicormic.160.billings.1, epicormic.160.billings.2, epicormic.160.billings.3, epicormic.160.billings.4,
+     epicormic.160.chico.1, epicormic.160.chico.2, epicormic.160.chico.3, epicormic.160.chico.4,
+     epicormic.160.chowchilla.1, epicormic.160.chowchilla.2, epicormic.160.chowchilla.3, epicormic.160.chowchilla.4,
+     epicormic.160.salida.1, epicormic.160.salida.2, epicormic.160.salida.3, epicormic.160.salida.4,
+     file = "epicormic_160.Rdata")
+
+```
+
+```{r}
+
+setwd("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report")
+
+axillary.160.billings.1<-readBismark("1BA1.deduplicated.CX_report.txt")
+axillary.160.billings.2<-readBismark("1BA2.deduplicated.CX_report.txt")
+axillary.160.billings.3<-readBismark("1BA3.deduplicated.CX_report.txt")
+axillary.160.billings.4<-readBismark("1BA4.deduplicated.CX_report.txt")
+
+axillary.160.chico.1<-readBismark("1CA1.deduplicated.CX_report.txt")
+axillary.160.chico.2<-readBismark("1CA2.deduplicated.CX_report.txt")
+axillary.160.chico.3<-readBismark("1CA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+axillary.160.chico.4<-readBismark("1CA4_R1_bismark_bt2_pe.deduplicated.CX_report.txt")
+
+
+axillary.160.chowchilla.1<- readBismark("1KA1_R1_bismark_bt2_pe.deduplicated.CX_report.txt")
+axillary.160.chowchilla.2<- readBismark("1KA2_R1_bismark_bt2_pe.deduplicated.CX_report.txt")
+axillary.160.chowchilla.3<- readBismark("1KA3.deduplicated.CX_report.txt")
+axillary.160.chowchilla.4<- readBismark("1KA4_R1_bismark_bt2_pe.deduplicated.CX_report.txt")
+
+
+axillary.160.salida.1<-readBismark("1SA1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+axillary.160.salida.2<-readBismark("1SA2.deduplicated.CX_report.txt")
+axillary.160.salida.3<-readBismark("1SA3.deduplicated.CX_report.txt")
+axillary.160.salida.4<-readBismark("1SA4_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+
+
+save(axillary.160.billings.1, axillary.160.billings.2, axillary.160.billings.3, axillary.160.billings.4,
+     axillary.160.chico.1, axillary.160.chico.2, axillary.160.chico.3, axillary.160.chico.4,
+     axillary.160.chowchilla.1, axillary.160.chowchilla.2, axillary.160.chowchilla.3, axillary.160.chowchilla.4,
+     axillary.160.salida.1, axillary.160.salida.2, axillary.160.salida.3, axillary.160.salida.4,
+     file = "axillary_160.Rdata")
+
+
+```
+
+```{r}
+
+setwd("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report")
+
+epicormic.201.billings.1<- readBismark("2BE1.deduplicated.CX_report.txt")
+epicormic.201.billings.2<- readBismark("2BE2.deduplicated.CX_report.txt")
+epicormic.201.billings.3<- readBismark("2BE3.deduplicated.CX_report.txt")
+epicormic.201.billings.4<- readBismark("2BE4.deduplicated.CX_report.txt")
+
+epicormic.201.chico.1<- readBismark("2CE1_R1_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.201.chico.2<- readBismark("2CE2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.201.chico.3<- readBismark("2CE3.deduplicated.CX_report.txt")
+epicormic.201.chico.4<- readBismark("2CE4.deduplicated.CX_report.txt")
+
+epicormic.201.chowchilla.1<- readBismark("2KE1.deduplicated.CX_report.txt")
+epicormic.201.chowchilla.2<- readBismark("2KE2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.201.chowchilla.3<- readBismark("2KE3.deduplicated.CX_report.txt")
+epicormic.201.chowchilla.4<- readBismark("2KE4.deduplicated.CX_report.txt")
+                     
+
+epicormic.201.salida.1 <- readBismark("2SE1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+epicormic.201.salida.2 <- readBismark("2SE2.deduplicated.CX_report.txt")
+epicormic.201.salida.3 <- readBismark("2SE3.deduplicated.CX_report.txt")
+epicormic.201.salida.4 <- readBismark("2SE4_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+                     
+
+save(epicormic.201.billings.1, epicormic.201.billings.2, epicormic.201.billings.3, epicormic.201.billings.4,
+     epicormic.201.chico.1, epicormic.201.chico.2, epicormic.201.chico.3, epicormic.201.chico.4,
+     epicormic.201.chowchilla.1, epicormic.201.chowchilla.2, epicormic.201.chowchilla.3, epicormic.201.chowchilla.4,
+     epicormic.201.salida.1, epicormic.201.salida.2, epicormic.201.salida.3, epicormic.201.salida.4,
+     file = "epicormic_201.Rdata")
+
+```
+
+```{r}
+setwd("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report")
+
+
+axillary.201.billings.1<- readBismark("2BA1_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+axillary.201.billings.2<- readBismark("2BA2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+axillary.201.billings.3<- readBismark("2BA3.deduplicated.CX_report.txt")
+axillary.201.billings.4<- readBismark("2BA4_R1_bismark_bt2_pe.deduplicated.CX_report.txt")
+
+
+axillary.201.chico.1<- readBismark("2CA1.deduplicated.CX_report.txt")
+axillary.201.chico.2<- readBismark("2CA2_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+axillary.201.chico.3<- readBismark("2CA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+axillary.201.chico.4<- readBismark("2CA4.deduplicated.CX_report.txt")
+                                      
+
+axillary.201.chowchilla.1<- readBismark("2KA1_R1_bismark_bt2_pe.deduplicated.CX_report.txt")
+axillary.201.chowchilla.2<- readBismark("2KA2.deduplicated.CX_report.txt")
+axillary.201.chowchilla.3<- readBismark("2KA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+axillary.201.chowchilla.4<- readBismark("2KA4_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")
+
+
+axillary.201.salida.1<- readBismark("2SA1.deduplicated.CX_report.txt")
+axillary.201.salida.2<- readBismark("2SA2.deduplicated.CX_report.txt")            
+axillary.201.salida.3<- readBismark( "2SA3_L001_R1_001_bismark_bt2_pe.deduplicated.CX_report.txt")            
+axillary.201.salida.4<- readBismark("2SA4.deduplicated.CX_report.txt")            
+
+save(axillary.201.billings.1, axillary.201.billings.2, axillary.201.billings.3, axillary.201.billings.4,
+     axillary.201.chico.1, axillary.201.chico.2, axillary.201.chico.3, axillary.201.chico.4,
+     axillary.201.chowchilla.1, axillary.201.chowchilla.2, axillary.201.chowchilla.3, axillary.201.chowchilla.4,
+     axillary.201.salida.1, axillary.201.salida.2, axillary.201.salida.3, axillary.201.salida.4,
+     file = "axillary_201.Rdata")
+
+```
+
+these take a long tiem to do so lets save them to some Rdata files so we can expidite the process a little
+
+```{r}
+#8-160
+
+save(epicormic.8160.billings, epicormic.8160.chico, epicormic.8160.chowchilla, epicormic.8160.salida, axillary.8160.billings, axillary.8160.chico, axillary.8160.chowchilla, axillary.8160.salida, file = "8_160_pooled_samples.Rdata")
+
+#8-201
+
+save(epicormic.8201.salida, epicormic.8201.chowchilla, epicormic.8201.chico, epicormic.8201.billings, axillary.8201.salida, axillary.8201.chowchilla, axillary.8201.chico, axillary.8201.billings, file = "8_201_pooled_samples.Rdata")
+```
+
+
+Load the R data 
+```{r}
+load("8_160_pooled_samples_fixed.Rdata")
+
+load("8_201_pooled_samples_fixed.Rdata")
+
+
+```
+
+
+load the fixed samples
+```{r}
+
+
+load("8_160_pooled_samples.Rdata")
+
+load("8_201_pooled_samples.Rdata")
+
+```
+
+Once the samples have been pooled, we can designate the pooled samples into the experimental groups in a Granges list. We will designate each of teh treatment variables: epicormic and axillary. We will do this for both of the varieties int he experiment. 
+
+```{r}
+#8-160
+epiaxilist160<- GRangesList("Epicormic" = epicormic.8160.billings,
+                            epicormic.8160.salida,
+                            epicormic.8160.chico, 
+                            epicormic.8160.chowchilla,
+                         "Axillary" = axillary.8160.billings,
+                         axillary.8160.chico,
+                         axillary.8160.chowchilla, 
+                         axillary.8160.salida)
+#8-201
+epiaxilist201<-GRangesList("Epicormic" = epicormic.8201.billings, 
+                           epicormic.8201.salida,
+                           epicormic.8201.chico,
+                           epicormic.8201.chowchilla,
+                          "Axillary" = axillary.8201.billings,
+                          axillary.8201.chico,
+                          axillary.8201.chowchilla,
+                          axillary.8201.salida)
+
+```
+
+In order to preform the next series on analyses, we need to provide some information about the chrosomes themselves. Specifically, how long the chrosomes themselves are, and there names. We will make a a series of Granges obejcts witht he chromosome lengths, then store them in a Granges list that we can use in the rest of the code. 
+
+```{r}
+#make the granges objects for each chromosome
+chr1 <- GRanges(seqnames = Rle("chr001"), ranges = IRanges(1,53037566))
+chr2 <- GRanges(seqnames = Rle("chr002"), ranges = IRanges(1,33982222))
+chr3 <- GRanges(seqnames = Rle("chr003"), ranges = IRanges(1,30537282))
+chr4 <- GRanges(seqnames = Rle("chr004"), ranges = IRanges(1,30643767))
+chr5 <- GRanges(seqnames = Rle("chr005"), ranges = IRanges(1,21032966))
+chr6 <- GRanges(seqnames = Rle("chr006"), ranges = IRanges(1,32793846))
+chr7 <- GRanges(seqnames = Rle("chr007"), ranges = IRanges(1,26338084))
+chr8 <- GRanges(seqnames = Rle("chr008"), ranges = IRanges(1,26044989))
+
+#create a granges list using those object
+chr_list<- list(chr1, chr2, chr3, chr4, chr5, chr6, chr7, chr8)
+
+#create a seperate vector of strings containing the names of the chromosomes
+chr_names<- list("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8")
+
+```
+
+
+First, we will start the analysis by building low resolution methylation profiles for each chromosome, for each context. This will provide a high level view of differenes in methylation between the two groups, as well as show broad trends in methylation between the two treatment groups. We make the profiles using 100k BP windows. This is primarily for ledgability, since any smaller windows make it impossible to tell here the differences are occuring, and any larger masks any trends.  Making the profiles will involve making a series of loops. While DMRcaller can make all the profiles on single plot, size limitations make it unledgable. Therefore, it was necessary to make a profile for each chromosome seperately. 
+
+```{r}
+#8-160 CpG
+
+#this loop builds axillary methylation profiles for each chromosome and then assigns them to an object
+for (x in seq_along(chr_list)){
+  profile <- computeMethylationProfile(epiaxilist160[["Axillary"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CG")
+  
+  object_name <- paste0("CpG.profile.axi.160.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+#this loop builds epicormic methylation profiles for each chromosome and then assigns them to an objec
+for (x in seq_along(chr_list)) {
+  profile <- computeMethylationProfile(epiaxilist160[["Epicormic"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CG")
+  
+  object_name <- paste0("CpG.profile.epi.160.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+
+#the profiles are then merged into a single list containing all the profiles
+
+#axillary
+profile_names.axi <- grep("CpG.profile.axi.160.", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.axi <- profile_names.axi[match(chr_names, gsub("CpG.profile.axi.160.", "", profile_names.axi))]
+
+CpG.160.axi.profiles <- mget(ordered_profile_names.axi, envir = .GlobalEnv)
+
+
+#epicormic
+profile_names.epi <- grep("CpG.profile.epi.160.", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.epi <- profile_names.epi[match(chr_names, gsub("CpG.profile.epi.160.", "", profile_names.epi))]
+
+CpG.160.epi.profiles <- mget(ordered_profile_names.epi, envir = .GlobalEnv)
+
+
+#this loop takes the profile from the epicormic and axillary lists and puts them into a single profile for each chromsome  
+for (i in seq_along(CpG.160.axi.profiles)) {
+  x <- CpG.160.axi.profiles[[i]]
+  y <- CpG.160.epi.profiles[[i]]
+  
+  profiles <- GRangesList("Axillary" = x, "Epicormic" = y)
+  
+  object_name <- paste0("CpG.160.profile.final.", chr_names[i])
+  
+  assign(object_name, profiles, envir = .GlobalEnv)
+}
+
+
+#this grabs all those profiles and puts them in a final list
+final_profile_names <- grep("CpG.160.profile.final.", names(.GlobalEnv), value = TRUE)
+
+ordered_final_profile_names <- final_profile_names[match(chr_names, gsub("CpG.160.profile.final.", "", final_profile_names))]
+
+CpG.160.final.profiles <- mget(ordered_final_profile_names, envir = .GlobalEnv)
+
+
+#this loop makes the graphs of the low resolution profiles
+for (i in seq_along(CpG.160.final.profiles)) {
+  x <- CpG.160.final.profiles[[i]]  # Get the current profile
+  
+  #this will make the titles on the plots correspond witht he correct chromsome name
+  title<- paste0("CpG methylation on ", chr_names[i], " 100000BP Window UCD 8-160")
+  
+  # Plot the methylation profile with the chromosome name as the title
+  plotMethylationProfile(
+    x,
+    autoscale = FALSE,
+    labels = NULL,
+    title = title,
+    col = c("orange3", "dodgerblue4"),
+    pch = c(1, 0),
+    lty = c(4, 1)
+  )
+}
+
+#8-160 CHG
+#this loop builds axillary methylation profiles for each chromosome and then assigns them to an object
+for (x in seq_along(chr_list)){
+  profile <- computeMethylationProfile(epiaxilist160[["Axillary"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CHG")
+  
+  object_name <- paste0("CHG.profile.axi.160.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+#this loop builds epicormic methylation profiles for each chromosome and then assigns them to an objec
+for (x in seq_along(chr_list)) {
+  profile <- computeMethylationProfile(epiaxilist160[["Epicormic"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CHG")
+  
+  object_name <- paste0("CHG.profile.epi.160.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+
+#the profiles are then merged into a single list containing all the profiles
+
+#axillary
+profile_names.axi <- grep("CHG.profile.axi.160", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.axi <- profile_names.axi[match(chr_names, gsub("CHG.profile.axi.160.", "", profile_names.axi))]
+
+CHG.160.axi.profiles <- mget(ordered_profile_names.axi, envir = .GlobalEnv)
+
+
+#epicormic
+profile_names.epi <- grep("CHG.profile.epi.160", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.epi <- profile_names.epi[match(chr_names, gsub("CHG.profile.epi.160.", "", profile_names.epi))]
+
+CHG.160.epi.profiles <- mget(ordered_profile_names.epi, envir = .GlobalEnv)
+
+
+#this loop takes the profile from the epicormic and axillary lists and puts them into a single profile for each chromsome  
+for (i in seq_along(CHG.160.axi.profiles)) {
+  x <- CHG.160.axi.profiles[[i]]
+  y <- CHG.160.epi.profiles[[i]]
+  
+  profiles <- GRangesList("Axillary" = x, "Epicormic" = y)
+  
+  object_name <- paste0("CHG.160.profile.final.", chr_names[i])
+  
+  assign(object_name, profiles, envir = .GlobalEnv)
+}
+
+
+#this grabs all those profiles and puts them in a final list
+final_profile_names <- grep("CHG.160.profile.final.", names(.GlobalEnv), value = TRUE)
+
+ordered_final_profile_names <- final_profile_names[match(chr_names, gsub("CHG.160.profile.final.", "", final_profile_names))]
+
+CHG.160.final.profiles <- mget(ordered_final_profile_names, envir = .GlobalEnv)
+
+
+#this loop makes the graphs of the low resolution profiles
+for (i in seq_along(CHG.160.final.profiles)) {
+  x <- CHG.160.final.profiles[[i]]  # Get the current profile
+  
+  #this will make the titles on the plots correspond witht he correct chromsome name
+  title<- paste0("CHG methylation on ", chr_names[i], " 100000BP Window UCD 8-160")
+  
+  # Plot the methylation profile with the chromosome name as the title
+  plotMethylationProfile(
+    x,
+    autoscale = FALSE,
+    labels = NULL,
+    title = title,
+    col = c("orange3", "dodgerblue4"),
+    pch = c(1, 0),
+    lty = c(4, 1)
+  )
+}
+
+
+pdf("CpG_methylation_profiles.pdf", width = 10, height = 8)
+par(mfrow = c(2, 4))  # Adjust rows and columns
+for (i in seq_along(CpG.160.final.profiles)) {
+  x <- CpG.160.final.profiles[[i]]
+  title <- paste0("CpG methylation on ", chr_names[i], " 100000BP Window UCD 8-160")
+  plotMethylationProfile(
+    x,
+    autoscale = FALSE,
+    labels = NULL,
+    title = title,
+    col = c("orange3", "dodgerblue4"),
+    pch = c(1, 0),
+    lty = c(4, 1)
+  )
+}
+dev.off()
+
+
+#8-160 CHH
+#this loop builds axillary methylation profiles for each chromosome and then assigns them to an object
+for (x in seq_along(chr_list)){
+  profile <- computeMethylationProfile(epiaxilist160[["Axillary"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CHH")
+  
+  object_name <- paste0("CHH.profile.axi.160.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+#this loop builds epicormic methylation profiles for each chromosome and then assigns them to an objec
+for (x in seq_along(chr_list)) {
+  profile <- computeMethylationProfile(epiaxilist160[["Epicormic"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CHH")
+  
+  object_name <- paste0("CHH.profile.epi.160.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+
+#the profiles are then merged into a single list containing all the profiles
+
+#axillary
+profile_names.axi <- grep("CHH.profile.axi.160", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.axi <- profile_names.axi[match(chr_names, gsub("CHH.profile.axi.160.", "", profile_names.axi))]
+
+CHH.160.axi.profiles <- mget(ordered_profile_names.axi, envir = .GlobalEnv)
+
+
+#epicormic
+profile_names.epi <- grep("CHH.profile.epi.160", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.epi <- profile_names.epi[match(chr_names, gsub("CHH.profile.epi.160.", "", profile_names.epi))]
+
+CHH.160.epi.profiles <- mget(ordered_profile_names.epi, envir = .GlobalEnv)
+
+
+#this loop takes the profile from the epicormic and axillary lists and puts them into a single profile for each chromsome  
+for (i in seq_along(CHH.160.axi.profiles)) {
+  x <- CHH.160.axi.profiles[[i]]
+  y <- CHH.160.epi.profiles[[i]]
+  
+  profiles <- GRangesList("Axillary" = x, "Epicormic" = y)
+  
+  object_name <- paste0("CHH.160.profile.final.", chr_names[i])
+  
+  assign(object_name, profiles, envir = .GlobalEnv)
+}
+
+
+#this grabs all those profiles and puts them in a final list
+final_profile_names <- grep("CHH.160.profile.final.", names(.GlobalEnv), value = TRUE)
+
+ordered_final_profile_names <- final_profile_names[match(chr_names, gsub("CHH.160.profile.final.", "", final_profile_names))]
+
+CHH.160.final.profiles <-mget(ordered_final_profile_names, envir = .GlobalEnv)
+
+
+#this loop makes the graphs of the low resolution profiles
+for (i in seq_along(CHH.160.final.profiles)) {
+  x <- CHH.160.final.profiles[[i]]  # Get the current profile
+  
+  #this will make the titles on the plots correspond witht he correct chromsome name
+  title<- paste0("CHH methylation on ", chr_names[i], " 100000BP Window UCD 8-160")
+  
+  # Plot the methylation profile with the chromosome name as the title
+  plotMethylationProfile(
+    x,
+    autoscale = FALSE,
+    labels = NULL,
+    title = title,
+    col = c("orange3", "dodgerblue4"),
+    pch = c(1, 0),
+    lty = c(4, 1)
+  )
+}
+```
+
+The loops now need to be done again for 8-201. We will put these ina sperate chunk
+
+```{r}
+#8-201 CpG
+
+#this loop builds axillary methylation profiles for each chromosome and then assigns them to an object
+for (x in seq_along(chr_list)){
+  profile <- computeMethylationProfile(epiaxilist201[["Axillary"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CG")
+  
+  object_name <- paste0("CpG.profile.axi.201.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+#this loop builds epicormic methylation profiles for each chromosome and then assigns them to an objec
+for (x in seq_along(chr_list)) {
+  profile <- computeMethylationProfile(epiaxilist201[["Epicormic"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CG")
+  
+  object_name <- paste0("CpG.profile.epi.201.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+
+#the profiles are then merged into a single list containing all the profiles
+
+#axillary
+profile_names.axi <- grep("CpG.profile.axi.201", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.axi <- profile_names.axi[match(chr_names, gsub("CpG.profile.axi.201.", "", profile_names.axi))]
+
+CpG.201.axi.profiles <- mget(ordered_profile_names.axi, envir = .GlobalEnv)
+
+
+#epicormic
+profile_names.epi <- grep("CpG.profile.epi.201", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.epi <- profile_names.epi[match(chr_names, gsub("CpG.profile.epi.201.", "", profile_names.epi))]
+
+CpG.201.epi.profiles <- mget(ordered_profile_names.epi, envir = .GlobalEnv)
+
+
+#this loop takes the profile from the epicormic and axillary lists and puts them into a single profile for each chromsome  
+for (i in seq_along(CpG.201.axi.profiles)) {
+  x <- CpG.201.axi.profiles[[i]]
+  y <- CpG.201.epi.profiles[[i]]
+  
+  profiles <- GRangesList("Axillary" = x, "Epicormic" = y)
+  
+  object_name <- paste0("CpG.201.profile.final.", chr_names[i])
+  
+  assign(object_name, profiles, envir = .GlobalEnv)
+}
+
+
+#this grabs all those profiles and puts them in a final list
+final_profile_names <- grep("CpG.201.profile.final.", names(.GlobalEnv), value = TRUE)
+
+ordered_final_profile_names <- final_profile_names[match(chr_names, gsub("CpG.201.profile.final.", "", final_profile_names))]
+
+CpG.201.final.profiles <- mget(ordered_final_profile_names, envir = .GlobalEnv)
+
+
+#this loop makes the graphs of the low resolution profiles
+for (i in seq_along(CpG.201.final.profiles)) {
+  x <- CpG.201.final.profiles[[i]]  # Get the current profile
+  
+  #this will make the titles on the plots correspond witht he correct chromsome name
+  title<- paste0("CpG methylation on ", chr_names[i], " 100000BP Window UCD 8-201")
+  
+  # Plot the methylation profile with the chromosome name as the title
+  plotMethylationProfile(
+    x,
+    autoscale = FALSE,
+    labels = NULL,
+    title = title,
+    col = c("orange3", "dodgerblue4"),
+    pch = c(1, 0),
+    lty = c(4, 1)
+  )
+}
+
+#8-201 CHG
+for (x in seq_along(chr_list)){
+  profile <- computeMethylationProfile(epiaxilist201[["Axillary"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CHG")
+  
+  object_name <- paste0("CHG.profile.axi.201.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+for (x in seq_along(chr_list)) {
+  profile <- computeMethylationProfile(epiaxilist201[["Epicormic"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CHG")
+  
+  object_name <- paste0("CHG.profile.epi.201.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+
+#create lists of all the profiles made in the last loop series
+profile_names.axi <- grep("CHG.profile.axi.201", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.axi <- profile_names.axi[match(chr_names, gsub("CHG.profile.axi.201.", "", profile_names.axi))]
+
+CHG.201.axi.profiles <- mget(ordered_profile_names.axi, envir = .GlobalEnv)
+
+
+
+profile_names.epi <- grep("CHG.profile.epi.201", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.epi <- profile_names.epi[match(chr_names, gsub("CHG.profile.epi.201.", "", profile_names.epi))]
+
+CHG.201.epi.profiles <- mget(ordered_profile_names.epi, envir = .GlobalEnv)
+
+
+#this loop takes the profile from the epicormic and axillary lists and puts them into a single profile  
+for (i in seq_along(CHG.201.axi.profiles)) {
+  x <- CHG.201.axi.profiles[[i]]
+  y <- CHG.201.epi.profiles[[i]]
+  
+  profiles <- GRangesList("Axillary" = x, "Epicormic" = y)
+  
+  object_name <- paste0("CHG.201.profile.final.", chr_names[i])
+  
+  assign(object_name, profiles, envir = .GlobalEnv)
+}
+
+
+#this grabs all those profiles and puts them in a final list
+final_profile_names <- grep("CHG.201.profile.final.", names(.GlobalEnv), value = TRUE)
+
+ordered_final_profile_names <- final_profile_names[match(chr_names, gsub("CHG.201.profile.final.", "", final_profile_names))]
+
+CHG.201.final.profiles <- mget(ordered_final_profile_names, envir = .GlobalEnv)
+
+
+#this loop makes the graphs of the low resolution profiles
+for (i in seq_along(CHG.201.final.profiles)) {
+  x <- CHG.201.final.profiles[[i]]  # Get the current profile
+  
+  title<- paste0("CHG methylation on ", chr_names[i], " 100000BP Window UCD 8-201")
+  
+  # Plot the methylation profile with the chromosome name as the title
+  plotMethylationProfile(
+    x,
+    autoscale = FALSE,
+    labels = NULL,
+    title = title,
+    col = c("orange3", "dodgerblue4"),
+    pch = c(1, 0),
+    lty = c(4, 1)
+  )
+}
+
+#8-201 CHH
+for (x in seq_along(chr_list)){
+  profile <- computeMethylationProfile(epiaxilist201[["Axillary"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CHH")
+  
+  object_name <- paste0("CHH.profile.axi.201.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+for (x in seq_along(chr_list)) {
+  profile <- computeMethylationProfile(epiaxilist201[["Epicormic"]],
+                                       chr_list[[x]],
+                                       windowSize = 100000,
+                                       context = "CHH")
+  
+  object_name <- paste0("CHH.profile.epi.201.", chr_names[x])
+  
+  assign(object_name, profile, envir = .GlobalEnv)
+}
+
+
+#create lists of all the profiles made in the last loop series
+profile_names.axi <- grep("CHH.profile.axi.201", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.axi <- profile_names.axi[match(chr_names, gsub("CHH.profile.axi.201.", "", profile_names.axi))]
+
+CHH.201.axi.profiles <- mget(ordered_profile_names.axi, envir = .GlobalEnv)
+
+
+
+profile_names.epi <- grep("CHH.profile.epi.201", names(.GlobalEnv), value = TRUE)
+
+ordered_profile_names.epi <- profile_names.epi[match(chr_names, gsub("CHH.profile.epi.201.", "", profile_names.epi))]
+
+CHH.201.epi.profiles <- mget(ordered_profile_names.epi, envir = .GlobalEnv)
+
+
+#this loop takes the profile from the epicormic and axillary lists and puts them into a single profile  
+for (i in seq_along(CHG.201.axi.profiles)) {
+  x <- CHH.201.axi.profiles[[i]]
+  y <- CHH.201.epi.profiles[[i]]
+  
+  profiles <- GRangesList("Axillary" = x, "Epicormic" = y)
+  
+  object_name <- paste0("CHH.201.profile.final.", chr_names[i])
+  
+  assign(object_name, profiles, envir = .GlobalEnv)
+}
+
+
+#this grabs all those profiles and puts them in a final list
+final_profile_names <- grep("CHH.201.profile.final.", names(.GlobalEnv), value = TRUE)
+
+ordered_final_profile_names <- final_profile_names[match(chr_names, gsub("CHH.201.profile.final.", "", final_profile_names))]
+
+CHH.201.final.profiles <- mget(ordered_final_profile_names, envir = .GlobalEnv)
+
+
+#this loop makes the graphs of the low resolution profiles
+for (i in seq_along(CHH.201.final.profiles)) {
+  x <- CHH.201.final.profiles[[i]]  # Get the current profile
+  
+  title<- paste0("CHH methylation on ", chr_names[i], " 100000BP Window UCD 8-201")
+  
+  # Plot the methylation profile with the chromosome name as the title
+  plotMethylationProfile(
+    x,
+    autoscale = FALSE,
+    labels = NULL,
+    title = title,
+    col = c("orange3", "dodgerblue4"),
+    pch = c(1, 0),
+    lty = c(4, 1)
+  )
+}
+
+```
+
+Now that we have the low-resolution profiles, we can proceed to actually call the DMRs themselves.DMR caller offers several different ways to call DMRs. noise_filter takes an unassisted approach calling DMRs basied on relative differences in methylation, neighborhood looks at methylation around sites that have differing methylation with smoothing, bins is a sliding window approach, and genes calls DMRs based on some annotation data.  
+
+Like before, DMRcaller struggles to do an entire list together, so we will make a loop for each individual chromosome, then recombine the Granges objects at th end.
+
+
+```{r}
+#160
+
+#CpG
+for (i in seq_along(chr_list)) {
+  x<- chr_list[[i]]
+  
+ DMR<-computeDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+                   regions = x, 
+                   context = "CG",
+                   method = "noise_filter",
+                   windowSize =100,
+                  kernelFunction = "triangular",
+                   test = "score",
+                   pValueThreshold = 0.01,
+                   minCytosinesCount = 4,
+                   minProportionDifference = 0.1,
+                   minGap = 0,
+                   minSize = 50,
+                   minReadsPerCytosine = 4,
+                   cores = 28)
+  
+  object_name <- paste0("DMRsCpG8160.", chr_names[i])
+  
+  assign(object_name, DMR, envir = .GlobalEnv)
+}
+
+DMR_CpG_160<- lapply(chr_names, function(chr){
+  object_name<- paste0("DMRsCpG8160.", chr)
+  get(object_name, envir = .GlobalEnv)
+})
+
+DMR_CpG_160<-GRangesList(DMR_CpG_160)
+DMR_CpG_160<- as.data.frame(DMR_CpG_160)
+
+
+#CHG
+for (i in seq_along(chr_list)) {
+  x<- chr_list[[i]]
+  
+ DMR<-computeDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+                   regions = x, 
+                   context = "CHG",
+                   method = "noise_filter",
+                   windowSize =100,
+                  kernelFunction = "triangular",
+                   test = "score",
+                   pValueThreshold = 0.01,
+                   minCytosinesCount = 4,
+                   minProportionDifference = 0.1,
+                   minGap = 0,
+                   minSize = 50,
+                   minReadsPerCytosine = 4,
+                   cores = 28)
+  
+  object_name <- paste0("DMRsNoiseFilterCHG8160.", chr_names[i])
+  
+  assign(object_name, DMR, envir = .GlobalEnv)
+}
+
+DMR_CHG_160<- lapply(chr_names, function(chr){
+  object_name<- paste0("DMRsNoiseFilterCHG8160.", chr)
+  get(object_name, envir = .GlobalEnv)
+})
+
+DMR_CHG_160<-GRangesList(DMR_CHG_160)
+DMR_CHG_160<- as.data.frame(DMR_CHG_160)
+
+
+
+
+#CHH
+for (i in seq_along(chr_list)) {
+  x<- chr_list[[i]]
+  
+  DMR<-computeDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+                   regions = x, 
+                   context = "CHH",
+                   method = "noise_filter",
+                   windowSize =100,
+                  kernelFunction = "triangular",
+                   test = "score",
+                   pValueThreshold = 0.01,
+                   minCytosinesCount = 4,
+                   minProportionDifference = 0.1,
+                   minGap = 0,
+                   minSize = 50,
+                   minReadsPerCytosine = 4,
+                   cores = 28)
+  
+  object_name <- paste0("DMRsBinsFilterCHH8160.", chr_names[i])
+  
+  assign(object_name, DMR, envir = .GlobalEnv)
+}
+
+DMR_CHH_160<- lapply(chr_names, function(chr){
+  object_name<- paste0("DMRsBinsFilterCHH8160.", chr)
+  get(object_name, envir = .GlobalEnv)
+})
+
+DMR_CHH_160<-GRangesList(DMR_CHH_160)
+DMR_CHH_160<- as.data.frame(DMR_CHH_160)
+
+ 
+ 
+```
+
+
+```{r}
+#201
+
+#CpG
+for (i in seq_along(chr_list)) {
+  x<- chr_list[[i]]
+  
+  DMR<-computeDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+                   regions = x, 
+                   context = "CG",
+                   method = "neighbourhood",
+                   test = "score",
+                   pValueThreshold = 0.01,
+                   minCytosinesCount = 4,
+                   minProportionDifference = 0.4,
+                   minGap = 200,
+                   minSize = 1,
+                   minReadsPerCytosine = 10,
+                   cores = 28)
+  
+  object_name <- paste0("DMRsCpG8201.", chr_names[i])
+  
+  assign(object_name, DMR, envir = .GlobalEnv)
+}
+
+DMR_CpG_201<- lapply(chr_names, function(chr){
+  object_name<- paste0("DMRsCpG8201.", chr)
+  get(object_name, envir = .GlobalEnv)
+})
+
+DMR_CpG_201<-GRangesList(DMR_CpG_201)
+
+DMR_CpG_201<- as.data.frame(DMR_CpG_201)
+DMR_CpG_201<- DMR_CpG_201[-c(1:2)]
+
+
+#CHG
+for (i in seq_along(chr_list)) {
+  x<- chr_list[[i]]
+  
+ DMR<-computeDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+                   regions = x, 
+                   context = "CHG",
+                   method = "noise_filter",
+                   windowSize =100,
+                  kernelFunction = "triangular",
+                   test = "score",
+                   pValueThreshold = 0.01,
+                   minCytosinesCount = 4,
+                   minProportionDifference = 0.2,
+                   minGap = 0,
+                   minSize = 50,
+                   minReadsPerCytosine = 10,
+                   cores = 28)
+  
+  object_name <- paste0("DMRsNoiseFilterCHG8201.", chr_names[i])
+  
+  assign(object_name, DMR, envir = .GlobalEnv)
+}
+
+DMR_CHG_201<- lapply(chr_names, function(chr){
+  object_name<- paste0("DMRsNoiseFilterCHG8201.", chr)
+  get(object_name, envir = .GlobalEnv)
+})
+
+DMR_CHG_201<-GRangesList(DMR_CHG_201)
+
+DMR_CHG_201<- as.data.frame(DMR_CHG_201)
+DMR_CHG_201<- DMR_CHG_201[-c(1:2)]
+
+
+
+#CHH
+for (i in seq_along(chr_list)) {
+  x<- chr_list[[i]]
+  
+  DMR<-computeDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+                   regions = x, 
+                   context = "CHH",
+                   method = "bins",
+                   binSize = 100,
+                   test = "score",
+                   pValueThreshold = 0.01,
+                   minCytosinesCount = 4,
+                   minProportionDifference = 0.4,
+                   minGap = 200,
+                   minSize = 50,
+                   minReadsPerCytosine = 4,
+                   cores = 28)
+  
+  object_name <- paste0("DMRsBinsFilterCHH8201.", chr_names[i])
+  
+  assign(object_name, DMR, envir = .GlobalEnv)
+}
+
+DMR_CHH_201<- lapply(chr_names, function(chr){
+  object_name<- paste0("DMRsBinsFilterCHH8201.", chr)
+  get(object_name, envir = .GlobalEnv)
+})
+
+DMR_CHH_201<-GRangesList(DMR_CHH_201)
+
+DMR_CHH_201<- as.data.frame(DMR_CHH_201)
+DMR_CHH_201<- DMR_CHH_201[-c(1:2)]
+
+
+```
+
+It seems calling the DMRs using the various methods don't seem to be calling very many at all, despite the adjustments of the various parameters. Either this means that there are no significant DMRs between the two sample groups, or that they are calling too small of DMRs to be significant, or there is some other issue at hand here, such as other confound factors. I could also be using the wrong function since these are pooled samples. So lets try calling DMRs using the annotation data from the NP genome. We can also try callign teh DMRs using the exons, or some other region.
+
+NOTE: So trying to do the single chromosome has so far taken almost two hours. This might be an effective way to do things, but I might need to do this is a shell script to do the entire thing. However, I would need to look up how to store the R data if I'm going to be doing the visualization. But still, it might be doable if I make the instance run for a really long time. 
+
+```{r}
+
+setwd("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report")
+#load gff of NP geneome fro NCBI
+almond.gff<- gffToGRanges("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report/genomic.gff")
+
+#adjust the RLE names in the GFF so they match with the Granges methylation object
+seqlevels(almond.gff)<- sub("CM037988.1", "chr001", seqlevels(almond.gff))
+seqlevels(almond.gff)<- sub("CM037989.1", "chr002", seqlevels(almond.gff))
+seqlevels(almond.gff)<- sub("CM037990.1", "chr003", seqlevels(almond.gff))
+seqlevels(almond.gff)<- sub("CM037991.1", "chr004", seqlevels(almond.gff))
+seqlevels(almond.gff)<- sub("CM037992.1", "chr005", seqlevels(almond.gff))
+seqlevels(almond.gff)<- sub("CM037993.1", "chr006", seqlevels(almond.gff))
+seqlevels(almond.gff)<- sub("CM037994.1", "chr007", seqlevels(almond.gff))
+seqlevels(almond.gff)<- sub("CM037995.1", "chr008", seqlevels(almond.gff))
+
+
+
+#subset by chromosome
+anno_chr_1<- almond.gff[seqnames(almond.gff)=="chr001"]
+anno_chr_2<- almond.gff[seqnames(almond.gff)=="chr002"]
+anno_chr_3<- almond.gff[seqnames(almond.gff)=="chr003"]
+anno_chr_4<- almond.gff[seqnames(almond.gff)=="chr004"]
+anno_chr_5<- almond.gff[seqnames(almond.gff)=="chr005"]
+anno_chr_6<- almond.gff[seqnames(almond.gff)=="chr006"]
+anno_chr_7<- almond.gff[seqnames(almond.gff)=="chr007"]
+anno_chr_8<- almond.gff[seqnames(almond.gff)=="chr008"]
+
+
+```
+
+
+
+```{r}
+DMRsGenesCG1<-filterDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+potentialDMRs = anno_chr_1,
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG2<-filterDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+potentialDMRs = anno_chr_2[overlapsAny(anno_chr_2, chr2)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG3<-filterDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+potentialDMRs = anno_chr_3[overlapsAny(anno_chr_3, chr3)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG4<-filterDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+potentialDMRs = anno_chr_4[overlapsAny(anno_chr_4, chr4)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG5<-filterDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+potentialDMRs = anno_chr_5[overlapsAny(anno_chr_5, chr5)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG6<-filterDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+potentialDMRs = anno_chr_6[overlapsAny(anno_chr_6, chr6)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG7<-filterDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+potentialDMRs = anno_chr_7[overlapsAny(anno_chr_7, chr7)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG<-filterDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+potentialDMRs = anno_chr_8[overlapsAny(anno_chr_8, chr8)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCGmit<-filterDMRs(epiaxilist160[["Axillary"]],
+                   epiaxilist160[["Epicormic"]],
+potentialDMRs = anno_mit[overlapsAny(anno_mit, mit)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRs8160Cg_all<- c(DMRsGenesCG1, DMRsGenesCG2, DMRsGenesCG3, DMRsGenesCG4, DMRsGenesCG5, DMRsGenesCG6, DMRsGenesCG7, DMRsGenesCG, DMRsGenesCGmit)
+
+
+DMRs8160Cg_all_df<- as.data.frame(DMRs8160Cg_all)
+
+write.csv(unlist(DMRs8160Cg_all_df), "/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report/DMRCGs_annotation.csv")
+
+save(DMRsGenesCG, DMRsGenesCG1, DMRsGenesCG2, DMRsGenesCG3, DMRsGenesCG4, DMRsGenesCG5, DMRsGenesCG6, DMRsGenesCG7, DMRsGenesCGmit, file = "DMRCGs_annotation.RData")
+
+
+local_chr_1<- GRanges(seqnames = Rle("chr001"), ranges = IRanges(3100000,3101000))
+
+plotLocalMethylationProfile(epiaxilist160[["Axillary"]],
+                            epiaxilist160[["Epicormic"]],
+  local_chr_1,
+DMRsGenesCG1,
+conditionsNames = c("Axillary", "Epicromic"),
+anno_chr_1,
+windowSize = 50,
+main="CG methylation")
+
+```
+
+
+```{r}
+DMRsGenesCG1<-filterDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+potentialDMRs = anno_chr_1,
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG2<-filterDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+potentialDMRs = anno_chr_2[overlapsAny(anno_chr_2, chr2)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG3<-filterDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+potentialDMRs = anno_chr_3[overlapsAny(anno_chr_3, chr3)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG4<-filterDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+potentialDMRs = anno_chr_4[overlapsAny(anno_chr_4, chr4)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG5<-filterDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+potentialDMRs = anno_chr_5[overlapsAny(anno_chr_5, chr5)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG6<-filterDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+potentialDMRs = anno_chr_6[overlapsAny(anno_chr_6, chr6)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG7<-filterDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+potentialDMRs = anno_chr_7[overlapsAny(anno_chr_7, chr7)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCG<-filterDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+potentialDMRs = anno_chr_8[overlapsAny(anno_chr_8, chr8)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRsGenesCGmit<-filterDMRs(epiaxilist201[["Axillary"]],
+                   epiaxilist201[["Epicormic"]],
+potentialDMRs = anno_mit[overlapsAny(anno_mit, mit)],
+context = "CG",
+test = "score",
+pValueThreshold = 0.01,
+minCytosinesCount = 4,
+minProportionDifference = 0.4,
+minReadsPerCytosine = 3,
+cores = 28)
+
+DMRs8201Cg_all<- c(DMRsGenesCG1, DMRsGenesCG2, DMRsGenesCG3, DMRsGenesCG4, DMRsGenesCG5, DMRsGenesCG6, DMRsGenesCG7, DMRsGenesCG, DMRsGenesCGmit)
+
+
+DMRs8201Cg_all_df<- as.data.frame(DMRs8201Cg_all)
+
+write.csv(unlist(DMRs8201Cg_all_df), "/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report/DMRCGs201_annotation.csv")
+
+save(DMRsGenesCG, DMRsGenesCG1, DMRsGenesCG2, DMRsGenesCG3, DMRsGenesCG4, DMRsGenesCG5, DMRsGenesCG6, DMRsGenesCG7, DMRsGenesCGmit, file = "DMRCGs201_annotation.RData")
+
+
+local_chr_1<- GRanges(seqnames = Rle("chr001"), ranges = IRanges(3100000,3101000))
+
+plotLocalMethylationProfile(epiaxilist201[["Axillary"]],
+                            epiaxilist201[["Epicormic"]],
+  local_chr_1,
+DMRsGenesCG1,
+conditionsNames = c("Axillary", "Epicromic"),
+anno_chr_1,
+windowSize = 50,
+main="CG methylation")
+
+```
+
+Now that we have 2 sets of DMRs from each of the varities, lets try and consolidate them into a single list, or at least see what the overlap between the two is. 
+
+```{r}
+#load in the DMRs. Convert them to data frames just to make things easier to see
+load("DMRCGs_annotation.RData")
+
+DMRs8260Cg_all<- c(DMRsGenesCG1, DMRsGenesCG2, DMRsGenesCG3, DMRsGenesCG4, DMRsGenesCG5, DMRsGenesCG6, DMRsGenesCG7, DMRsGenesCG, DMRsGenesCGmit)
+
+DMRs8160Cg_all_df<- as.data.frame(DMRs8260Cg_all)
+
+load("DMRCGs201_annotation.RData")
+
+DMRs8201Cg_all<- c(DMRsGenesCG1, DMRsGenesCG2, DMRsGenesCG3, DMRsGenesCG4, DMRsGenesCG5, DMRsGenesCG6, DMRsGenesCG7, DMRsGenesCG, DMRsGenesCGmit)
+DMRs8201Cg_all_df<- as.data.frame(DMRs8201Cg_all)
+
+#check for any overlap between the two sets of ranges
+findOverlaps(DMRs8260Cg_all, DMRs8201Cg_all)
+
+overlapsAny(DMRs8260Cg_all, DMRs8201Cg_all)
+
+#there are none...
+
+
+```
+
+There appear to be no overlapping ranges. This is sort of odd, since it means that the epicormic/axillary difference doesn't have any sequences in common between the two. Does this mean that the 8-160 samples are just more similar than the 8-201 samples? Or possibly is there some issue with the samples themselves? 
+
+Since these are primiarily exons, as well as start and start codons, it can be inffereed that these DMRs may be controlling the reuglation of certain genes. Lets try querying the almond genome to see if we can get nearby gene regions that these differing areas of methylation might be controlling. 
+
+
+Lets try making a large data frame with all of the methylaiton profiles in their respective buckets. That way, we can look at the 100kb windows and try and devise other ways of doing the analysis.
+
+```{r}
+#create the axi list first
+CpG.160.axi.object<- c(CpG.profile.axi.160.chr1,
+                       CpG.profile.axi.160.chr2,
+                       CpG.profile.axi.160.chr3,
+                       CpG.profile.axi.160.chr4,
+                       CpG.profile.axi.160.chr5,
+                       CpG.profile.axi.160.chr6,
+                       CpG.profile.axi.160.chr7,
+                       CpG.profile.axi.160.chr8)
+
+#covert to a data frame
+CpG.160.axi.df<- as.data.frame(CpG.160.axi.object)
+
+#add in the tissue type as a column
+CpG.160.axi.df<- CpG.160.axi.df %>%
+  mutate(CpG.160.axi.df, tissue = "axillary")
+
+#repeat steps for epi list
+
+CpG.160.epi.object<- c(CpG.profile.epi.160.chr1,
+                       CpG.profile.epi.160.chr2,
+                       CpG.profile.epi.160.chr3,
+                       CpG.profile.epi.160.chr4,
+                       CpG.profile.epi.160.chr5,
+                       CpG.profile.epi.160.chr6,
+                       CpG.profile.epi.160.chr7,
+                       CpG.profile.epi.160.chr8)
+
+#covert to a data frame
+CpG.160.epi.df<- as.data.frame(CpG.160.epi.object)
+
+#add in the tissue type as a column
+CpG.160.epi.df<- CpG.160.epi.df %>%
+  mutate(CpG.160.epi.df, tissue = "epicormic")
+
+#combine the two
+CpG.160.final.object<- bind_rows(CpG.160.axi.df, CpG.160.epi.df)
+
+#convert the data frame into a Granges object
+CpG.160.final.Granges<- GRanges(CpG.160.final.object)
+
+save(CpG.160.final.object, CpG.160.final.Granges, file="10000kb_window_CpG_160.Rdata")
+
+#create the axi list first
+CpG.201.axi.object<- c(CpG.profile.axi.201.chr1,
+                       CpG.profile.axi.201.chr2,
+                       CpG.profile.axi.201.chr3,
+                       CpG.profile.axi.201.chr4,
+                       CpG.profile.axi.201.chr5,
+                       CpG.profile.axi.201.chr6,
+                       CpG.profile.axi.201.chr7,
+                       CpG.profile.axi.201.chr8)
+
+#covert to a data frame
+CpG.201.axi.df<- as.data.frame(CpG.201.axi.object)
+
+#add in the tissue type as a column
+CpG.201.axi.df<- CpG.201.axi.df %>%
+  mutate(CpG.201.axi.df, tissue = "axillary")
+
+#repeat steps for epi list
+
+CpG.201.epi.object<- c(CpG.profile.epi.201.chr1,
+                       CpG.profile.epi.201.chr2,
+                       CpG.profile.epi.201.chr3,
+                       CpG.profile.epi.201.chr4,
+                       CpG.profile.epi.201.chr5,
+                       CpG.profile.epi.201.chr6,
+                       CpG.profile.epi.201.chr7,
+                       CpG.profile.epi.201.chr8)
+
+#covert to a data frame
+CpG.201.epi.df<- as.data.frame(CpG.201.epi.object)
+
+#add in the tissue type as a column
+CpG.201.epi.df<- CpG.201.epi.df %>%
+  mutate(CpG.201.epi.df, tissue = "epicormic")
+
+#combine the two
+CpG.201.final.object<- bind_rows(CpG.201.axi.df, CpG.201.epi.df)
+
+#convert the data frame into a Granges object
+CpG.201.final.Granges<- GRanges(CpG.201.final.object)
+
+save(CpG.201.final.object, CpG.201.final.Granges, file="10000kb_window_CpG_160.Rdata")
+
+
+```
+
+Making the Granges objects for each individual set of pooled samples
+``` {r}
+
+samples_8.160<- list(axillary.8160.billings, 
+                     axillary.8160.chico,
+                     axillary.8160.chowchilla, 
+                     axillary.8160.salida,
+                     epicormic.8160.billings, 
+                     epicormic.8160.chico, 
+                     epicormic.8160.chowchilla, 
+                     epicormic.8160.salida)
+
+names(samples_8.160) <- c("axillary.8160.billings", 
+                          "axillary.8160.chico",
+                          "axillary.8160.chowchilla", 
+                          "axillary.8160.salida",
+                          "epicormic.8160.billings", 
+                          "epicormic.8160.chico", 
+                          "epicormic.8160.chowchilla", 
+                          "epicormic.8160.salida")
+
+for (x in seq_along(chr_list)) {
+  for (y in seq_along(samples_8.160)) {
+    
+    profile <- computeMethylationProfile(
+      samples_8.160[[y]],    
+      chr_list[[x]],         
+      windowSize = 100000,
+      context = "CG"
+    )
+    
+    object_name <- paste0(names(samples_8.160)[y], ".", chr_names[x])
+    
+    assign(object_name, profile, envir = .GlobalEnv)
+  }
+}
+
+
+sample_names <- c("axillary.8160.billings", 
+                  "axillary.8160.chico",
+                  "axillary.8160.chowchilla", 
+                  "axillary.8160.salida",
+                  "epicormic.8160.billings", 
+                  "epicormic.8160.chico", 
+                  "epicormic.8160.chowchilla", 
+                  "epicormic.8160.salida")
+
+# Extract tissue and location from sample names for adding metadata later
+tissue_types <- c("axillary", "axillary", "axillary", "axillary", 
+                  "epicormic", "epicormic", "epicormic", "epicormic")
+locations <- c("billings", "chico", "chowchilla", "salida", 
+               "billings", "chico", "chowchilla", "salida")
+
+# Loop through each sample in the samples_8.160 list
+for (i in seq_along(samples_8.160)) {
+
+  # Combine the chromosomes for the current sample
+  sample_object <- do.call(c, lapply(chr_names, function(chr) {
+    get(paste0(sample_names[i], ".", chr))
+  }))
+  
+  # Convert to data frame
+  CpG_df <- as.data.frame(sample_object)
+  
+  # Add treatment group metadata (tissue, location, variety)
+  CpG_df <- CpG_df %>%
+    mutate(tissue = tissue_types[i], 
+           location = locations[i], 
+           variety = "8_160")
+  
+  # Assign the data frame to a global variable with a dynamic name
+  object_name <- paste0(sample_names[i], ".df")
+  assign(object_name, CpG_df, envir = .GlobalEnv)
+  
+}
+
+
+samples_8.201<- list(axillary.8201.billings, 
+                     axillary.8201.chico,
+                     axillary.8201.chowchilla, 
+                     axillary.8201.salida,
+                     epicormic.8201.billings, 
+                     epicormic.8201.chico, 
+                     epicormic.8201.chowchilla, 
+                     epicormic.8201.salida)
+
+names(samples_8.201) <- c("axillary.8201.billings", 
+                          "axillary.8201.chico",
+                          "axillary.8201.chowchilla", 
+                          "axillary.8201.salida",
+                          "epicormic.8201.billings", 
+                          "epicormic.8201.chico", 
+                          "epicormic.8201.chowchilla", 
+                          "epicormic.8201.salida")
+
+for (x in seq_along(chr_list)) {
+  for (y in seq_along(samples_8.201)) {
+    
+    profile <- computeMethylationProfile(
+      samples_8.201[[y]],    
+      chr_list[[x]],         
+      windowSize = 100000,
+      context = "CG"
+    )
+    
+    object_name <- paste0(names(samples_8.201)[y], ".", chr_names[x])
+    
+    assign(object_name, profile, envir = .GlobalEnv)
+  }
+}
+
+
+sample_names <- c("axillary.8201.billings", 
+                  "axillary.8201.chico",
+                  "axillary.8201.chowchilla", 
+                  "axillary.8201.salida",
+                  "epicormic.8201.billings", 
+                  "epicormic.8201.chico", 
+                  "epicormic.8201.chowchilla", 
+                  "epicormic.8201.salida")
+
+# Extract tissue and location from sample names for adding metadata later
+tissue_types <- c("axillary", "axillary", "axillary", "axillary", 
+                  "epicormic", "epicormic", "epicormic", "epicormic")
+locations <- c("billings", "chico", "chowchilla", "salida", 
+               "billings", "chico", "chowchilla", "salida")
+
+# Loop through each sample in the samples_8.160 list
+for (i in seq_along(samples_8.201)) {
+
+  # Combine the chromosomes for the current sample
+  sample_object <- do.call(c, lapply(chr_names, function(chr) {
+    get(paste0(sample_names[i], ".", chr))
+  }))
+  
+  # Convert to data frame
+  CpG_df <- as.data.frame(sample_object)
+  
+  # Add treatment group metadata (tissue, location, variety)
+  CpG_df <- CpG_df %>%
+    mutate(tissue = tissue_types[i], 
+           location = locations[i], 
+           variety = "8_201")
+  
+  # Assign the data frame to a global variable with a dynamic name
+  object_name <- paste0(sample_names[i], ".df")
+  assign(object_name, CpG_df, envir = .GlobalEnv)
+  
+}
+
+methylation_df_all_samples<-bind_rows(axillary.8160.billings.df,
+                                      epicormic.8160.billings.df,
+                                      axillary.8160.chico.df, 
+                                      epicormic.8160.chico.df,
+                                      axillary.8160.chowchilla.df,
+                                      epicormic.8160.chowchilla.df,
+                                      axillary.8160.salida.df,
+                                      epicormic.8160.salida.df,
+                                      axillary.8201.billings.df,
+                                      epicormic.8201.billings.df,
+                                      axillary.8201.chico.df,
+                                      epicormic.8201.chico.df,
+                                      axillary.8201.chowchilla.df,
+                                      epicormic.8201.chowchilla.df,
+                                      axillary.8201.salida.df,
+                                      epicormic.8201.salida.df)
+
+save(axillary.8160.billings.df,
+                                      epicormic.8160.billings.df,
+                                      axillary.8160.chico.df, 
+                                      epicormic.8160.chico.df,
+                                      axillary.8160.chowchilla.df,
+                                      epicormic.8160.chowchilla.df,
+                                      axillary.8160.salida.df,
+                                      epicormic.8160.salida.df,
+                                      axillary.8201.billings.df,
+                                      epicormic.8201.billings.df,
+                                      axillary.8201.chico.df,
+                                      epicormic.8201.chico.df,
+                                      axillary.8201.chowchilla.df,
+                                      epicormic.8201.chowchilla.df,
+                                      axillary.8201.salida.df,
+                                      epicormic.8201.salida.df,
+     methylation_df_all_samples,
+     file="cpg_sample_profiles_all.Rdata")
+
+```
+
+Now that I have a data frame with all of the kb windows, lets try doing some other stuff.
+
+```{r}
+library(tidyverse)
+library(ggdendro)
+library(pvclust)
+library(gplots)
+library(RColorBrewer)
+
+load("/users/PAS1755/whazzard/cpg_sample_profiles_all.Rdata")
+
+load("/users/PAS1755/whazzard/1000bp_cpg_sample_profiles_all.Rdata")
+
+load("100kbp_cpg_sample_profiles_all.Rdata")
+
+#lets try making a heat map
+
+#add a column that combines the treatment factors to make a single sample name
+methylation_df_all_samples$sample_name<- paste(methylation_df_all_samples$tissue,
+                                               methylation_df_all_samples$location,
+                                               methylation_df_all_samples$variety, 
+                                               sep = "_")
+
+#now we need to make unique window names
+methylation_df_all_samples$window<- paste(methylation_df_all_samples$seqnames, 
+                                          methylation_df_all_samples$start,
+                                          sep = "_")
+
+#remove the other variables so its just the proportion of difference in the windows
+heatmap_df<- methylation_df_all_samples %>%
+  select( sample_name, window, Proportion)
+
+
+#transpose so its the proportion from each sample at each window
+
+heatmap_df <- heatmap_df %>%
+  pivot_wider(names_from = sample_name, values_from = Proportion) %>%
+      column_to_rownames(var= "window")
+
+
+
+
+#now lets take the coeffcient of variation in the proportion column to select which of the windows to take
+
+calc.cv <- function(x, na.rm=TRUE) { # function to calculate the coefficient of variation
+  if(na.rm==TRUE) x <- na.omit(x)
+  result <- sd(x) / mean(x) # CV calculation
+  result <- abs(result) # no negative CVs!
+  return(result)
+}
+
+heatmap_df$cv  <- apply(heatmap_df[,-1], 1, calc.cv)
+
+#lets try looking at the top 100 windows with the greatest variation
+heatmap_df_100<- heatmap_df %>%
+  arrange(desc(cv)) %>%
+  slice(1:100)
+
+
+heatmap_df_100<-  select(heatmap_df, -c(cv))
+
+#convert the top 100 to a matrix
+heatmap_100_matrix<- heatmap_df_100%>% 
+  as.matrix() %>% 
+  scale() 
+
+#make a dendogram base off of the windows with the most distance between them
+window_hclust_row <- heatmap_100_matrix %>% t %>% dist() %>% hclust()
+ggdendrogram(window_hclust_row)
+
+#set the windows for the subcluster. 8 seems like it might be good?
+plot(window_hclust_row, cex=.6) #redraw the tree everytime before adding the rectangles
+rect.hclust(window_hclust_row, k = 4, border = "red")
+
+
+#lets try to get an optimal subclustering with pvclust
+set.seed(100) 
+
+fit <- pvclust(heatmap_100_matrix, method.hclust = "ward.D", method.dist = "euclidean", nboot = 50)
+
+#plot the bootstrap dendogram
+plot(fit, print.num=FALSE)
+
+
+#it looks like ultimately its clustering largely by variety, byt then will split based on the sample, with some exception
+
+#lets try making heatmap
+heatmap.2(as.matrix(heatmap_df_100), Rowv=as.dendrogram(window_hclust_row), 
+          scale="row", 
+          density.info="none", 
+          trace="none",
+         srtRow = 10, 
+          srtCol= 45,
+          margins = c(10,12))
+
+#what is going on? There isn't a diagonal with similarities between the sample. Maybe it's because there are too few windows we're looking at. Lets increase them to 1000 and see what happens
+
+
+heatmap_df_full<- heatmap_df %>%
+  arrange(desc(cv))
+
+heatmap_df_full<-  select(heatmap_df_full, -c(cv))
+
+heatmap_full_matrix<- heatmap_df_full%>%
+  as.matrix() %>% 
+  scale() 
+
+
+
+window_hclust_full <- heatmap_full_matrix %>% t %>% dist() %>% hclust()
+ggdendrogram(window_hclust_full)
+
+#at 1000 windows, the dendogram clusters more clearly between the two varieties. The other sub clusters though are sort of all over the place. 
+
+#set windows at 4
+plot(window_hclust_full, cex=.6) #redraw the tree everytime before adding the rectangles
+rect.hclust(window_hclust_full, k = 2, border = "red")
+
+
+#lets try to get an optimal subclustering with pvclust
+set.seed(100) 
+
+#lets also increase teh bootstrapping a little here
+fit <- pvclust(heatmap_full_matrix, method.hclust = "ward.D", method.dist = "euclidean", nboot = 1000)
+
+#plot the bootstrap dendogram
+plot(fit, print.num=FALSE)
+
+
+#so this looks pretty good. There is a clear split clustering between teh varieties, and thbootstrpping got rid of the outgroup, so it may have just been an issue with sampling to make that one an outlier. epicormic and axillary are sort of clustering together too in the smaller groups. but locations eems all over
+
+
+#lets try making heatmap
+heatmap.2(as.matrix(heatmap_full_matrix),
+          Colv=as.dendrogram(window_hclust_full),
+          scale="row",
+          labRow = FALSE,
+          density.info="none",
+          dendrogram = "none",
+          xlab = "Samples", 
+          ylab = "Windows",
+          trace="none",
+          srtRow = 10, 
+          srtCol= 25,
+          cexCol = 0.5,
+          margins = c(5,7),
+          col="topo.colors")
+
+
+
+#one last time without cheery picking anything
+heatmap_df_1000<- heatmap_df %>%
+  arrange(desc(cv)) %>%
+  slice(1:1000)
+
+
+heatmap_df_1000<-  select(heatmap_df_1000, -c(cv))
+
+
+heatmap_1000_matrix<- heatmap_df_1000%>% 
+  as.matrix() %>% 
+  scal
+
+window_hclust_1000 <- heatmap_1000_matrix %>% t %>% dist() %>% hclust()
+ggdendrogram(window_hclust_1000)
+
+#at 1000 windows, the dendogram clusters more clearly between the two varieties. The other sub clusters though are sort of all over the place. 
+
+#set windows at 4
+plot(window_hclust_1000, cex=.6) #redraw the tree everytime before adding the rectangles
+rect.hclust(window_hclust_1000, k = 2, border = "red")
+
+
+#lets try to get an optimal subclustering with pvclust
+set.seed(100) 
+
+#lets also increase teh bootstrapping a little here
+fit <- pvclust(heatmap_1000_matrix, method.hclust = "ward.D", method.dist = "euclidean", nboot = 1000)
+
+#plot the bootstrap dendogram
+plot(fit, print.num=FALSE)
+
+
+#so this looks pretty good. There is a clear split clustering between teh varieties, and thbootstrpping got rid of the outgroup, so it may have just been an issue with sampling to make that one an outlier. epicormic and axillary are sort of clustering together too in the smaller groups. but locations eems all over
+
+
+#lets try making heatmap
+heatmap.2(as.matrix(heatmap_df_1000),
+          scale="row", 
+          dendrogram = "none",
+          density.info="none", 
+          trace="none",
+          srtRow = 0, 
+          srtCol= 45,
+          cexCol = 0.5,
+          margins = c(9,12) )
+
+
+#Let's now try doing some k-means clustering to see if we can make clusters base upon the windows
+
+library(ggplot2)
+
+# get principle components
+prcomp_counts <- prcomp(heatmap_1000_matrix) 
+scores <- as.data.frame(prcomp_counts$x)[,c(1,2)]
+
+set.seed(25) #make this repeatable as kmeans has random starting positions
+fit <- kmeans(heatmap_1000_matrix, 9)
+clus <- as.data.frame(fit$cluster)
+names(clus) <- paste("cluster")
+
+plotting <- merge(clus, scores, by = "row.names")
+plotting$cluster <- as.factor(plotting$cluster)
+
+# plot of observations
+ggplot(data = plotting, aes(x = PC1, y = PC2, label = Row.names, color = cluster)) +
+  geom_hline(yintercept = 0, colour = "gray65") +
+  geom_vline(xintercept = 0, colour = "gray65") +
+  geom_point(alpha = 0.8, size = 2, stat = "identity") 
+
+library(cluster)
+set.seed(125)
+gap <- clusGap(heatmap_1000_matrix, FUN = kmeans, iter.max = 30, K.max = 20, B = 100)
+plot(gap, main = "Gap Statistic")
+```
+
+Let's try doing some T tests with the various proportions of difference and the methylation counts based on the various factors, now that we have the data broken down a little bit. 
+
+
+```{r}
+#change the various treatment groups to factors
+methylation_df_all_samples$tissue<- as.factor(methylation_df_all_samples$tissue)
+methylation_df_all_samples$location<- as.factor(methylation_df_all_samples$location)
+methylation_df_all_samples$variety<- as.factor(methylation_df_all_samples$variety)
+
+str(methylation_df_all_samples)
+
+#make a linear model
+
+proportion.model<- lm(Proportion~tissue+variety+location, data = methylation_df_all_samples)
+
+anova(proportion.model)
+
+t.test(Proportion~tissue, data = methylation_df_all_samples)
+
+#looking at the proportions from the t test, it looks like there is a significant difference between the two? although just barely. And is that really a signifcant finding? The overall proportion of the CG methylation, meaning how much is overall methylated between the two, is not all that different. Epicormic is slightly hypometyhlated, which does align with the original hypothesis. 
+
+t.test(Proportion~variety, data = methylation_df_all_samples)
+
+#looking at the variety, the difference is quite significant. This seems to be in line with everything else the data is sayin, which is that the methylation profiles are quite different betwent he two varieties. 
+
+```
+Let's try soemthing else where I use the annotation to find any overlap with the windows, or apply gene areas to the windows themselves.
+```{r}
+#lets try to convert the methylation object back to a Granges object
+
+methylation_granges_all<- GRanges(methylation_df_all_samples)
+genes<- almond.gff[which(almond.gff$type=="gene")]
+
+findOverlaps(methylation_granges_all, genes)
+
+#okay so the 100kbp window is way to large. there are too many places hwere the genes overlap. Let's try looking at the top 100 based on the CV from the heatmap object before
+
+heatmap_df_100 <- heatmap_df_100 %>%
+  mutate(window = rownames(heatmap_df_100))
+
+top_windows<- inner_join(methylation_df_all_samples, heatmap_df_100, by = "window")
+
+top_windows_granges<- GRanges(top_windows)
+
+hits<-findOverlaps(top_windows_granges, genes)
+
+DMR_genes<- subsetByOverlaps( genes, top_windows_granges)
+
+DMR_genes
+
+#okay well that reduces it down from 5m to 30k overlaping areas, but since the windows are repeated 16 times across all the samples? then that means there are roughly 2k gene areas that overlap with the most different windows. What does that mean though?
+
+#I thin the issue here is that the overlap windows are too large. The bins need to be smaller for this type of thing to be effective.
+```
+
+methylation profiles for each individual sample
+```{r}
+
+load("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report/axillary_201.Rdata")
+
+samples_axillary_8.201<- list(axillary.201.billings.1, 
+                     axillary.201.billings.2,
+                     axillary.201.billings.3,
+                     axillary.201.billings.4,
+                     axillary.201.chico.1,
+                     axillary.201.chico.2,
+                     axillary.201.chico.3,
+                     axillary.201.chico.4,
+                     axillary.201.chowchilla.1,
+                       axillary.201.chowchilla.2,
+                       axillary.201.chowchilla.3,
+                       axillary.201.chowchilla.4,
+                     axillary.201.salida.1,
+                       axillary.201.salida.2,
+                       axillary.201.salida.3,
+                       axillary.201.salida.4)
+                     
+                       
+names(samples_axillary_8.201) <- c("axillary.201.billings.1", 
+                     "axillary.201.billings.2",
+                     "axillary.201.billings.3",
+                     "axillary.201.billings.4",
+                     "axillary.201.chico.1",
+                     "axillary.201.chico.2",
+                     "axillary.201.chico.3",
+                     "axillary.201.chico.4",
+                     "axillary.201.chowchilla.1",
+                       "axillary.201.chowchilla.2",
+                       "axillary.201.chowchilla.3",
+                       "axillary.201.chowchilla.4",
+                     "axillary.201.salida.1",
+                       "axillary.201.salida.2",
+                       "axillary.201.salida.3",
+                       "axillary.201.salida.4")
+
+for (x in seq_along(chr_list)) {
+  for (y in seq_along(samples_axillary_8.201)) {
+    
+    profile <- computeMethylationProfile(
+      samples_axillary_8.201[[y]],    
+      chr_list[[x]],         
+      windowSize = 100000,
+      context = "CG"
+    )
+    
+    object_name <- paste0(names(samples_axillary_8.201)[y], ".", chr_names[x])
+    
+    assign(object_name, profile, envir = .GlobalEnv)
+  }
+}
+
+tissue_types <- c("axillary", "axillary", "axillary", "axillary", 
+                  "axillary", "axillary", "axillary", "axillary",
+                  "axillary", "axillary", "axillary", "axillary",
+                  "axillary", "axillary", "axillary", "axillary")
+
+locations <- c("billings","billings", "billings", "billings",
+               "chico","chico", "chico","chico",
+               "chowchilla", "chowchilla", "chowchilla", "chowchilla",
+               "salida", "salida", "salida", "salida",
+               "billings","billings", "billings", "billings",
+               "chico","chico","chico","chico",
+                "chowchilla","chowchilla", "chowchilla", "chowchilla",
+               "salida", "salida", "salida", "salida")
+
+reps<- c("1", "2", "3", "4",
+         "1", "2", "3", "4",
+         "1", "2", "3", "4",
+         "1", "2", "3", "4")
+
+sample_names <-  c("axillary.201.billings.1", 
+                     "axillary.201.billings.2",
+                     "axillary.201.billings.3",
+                     "axillary.201.billings.4",
+                     "axillary.201.chico.1",
+                     "axillary.201.chico.2",
+                     "axillary.201.chico.3",
+                     "axillary.201.chico.4",
+                     "axillary.201.chowchilla.1",
+                       "axillary.201.chowchilla.2",
+                       "axillary.201.chowchilla.3",
+                       "axillary.201.chowchilla.4",
+                     "axillary.201.salida.1",
+                       "axillary.201.salida.2",
+                       "axillary.201.salida.3",
+                       "axillary.201.salida.4")
+
+
+
+# Loop through each sample in the samples_8.160 list
+for (i in seq_along(samples_axillary_8.201)) {
+
+  # Combine the chromosomes for the current sample
+  sample_object <- do.call(c, lapply(chr_names, function(chr) {
+    get(paste0(sample_names[i], ".", chr))
+  }))
+  
+  # Convert to data frame
+  CpG_df <- as.data.frame(sample_object)
+  
+  # Add treatment group metadata (tissue, location, variety)
+  CpG_df <- CpG_df %>%
+    mutate(tissue = tissue_types[i], 
+           location = locations[i], 
+           rep = reps[i],
+           variety = "8_201")
+  
+  # Assign the data frame to a global variable with a dynamic name
+  object_name <- paste0(sample_names[i], ".df")
+  assign(object_name, CpG_df, envir = .GlobalEnv)
+  
+}
+
+save(axillary.201.billings.1.df, axillary.201.billings.2.df, axillary.201.billings.3.df, axillary.201.billings.4.df,
+     axillary.201.chico.1.df, axillary.201.chico.2.df, axillary.201.chico.3.df, axillary.201.chico.4.df,
+     axillary.201.chowchilla.1.df, axillary.201.chowchilla.2.df, axillary.201.chowchilla.3.df, axillary.201.chowchilla.4.df,
+     axillary.201.salida.1.df, axillary.201.salida.2.df, axillary.201.salida.3.df, axillary.201.salida.4.df,
+     file = "axillary_201_kb_windows.Rdata")
+
+   
+load("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report/epicormic_201.Rdata")
+
+samples_epicormic_8.201<- list(epicormic.201.billings.1, 
+                     epicormic.201.billings.2,
+                     epicormic.201.billings.3,
+                     epicormic.201.billings.4,
+                     epicormic.201.chico.1,
+                     epicormic.201.chico.2,
+                     epicormic.201.chico.3,
+                     epicormic.201.chico.4,
+                     epicormic.201.chowchilla.1,
+                       epicormic.201.chowchilla.2,
+                       epicormic.201.chowchilla.3,
+                       epicormic.201.chowchilla.4,
+                     epicormic.201.salida.1,
+                       epicormic.201.salida.2,
+                       epicormic.201.salida.3,
+                       epicormic.201.salida.4)
+                     
+                       
+names(samples_epicormic_8.201) <- c("epicormic.201.billings.1", 
+                     "epicormic.201.billings.2",
+                     "epicormic.201.billings.3",
+                     "epicormic.201.billings.4",
+                     "epicormic.201.chico.1",
+                     "epicormic.201.chico.2",
+                     "epicormic.201.chico.3",
+                     "epicormic.201.chico.4",
+                     "epicormic.201.chowchilla.1",
+                       "epicormic.201.chowchilla.2",
+                       "epicormic.201.chowchilla.3",
+                       "epicormic.201.chowchilla.4",
+                     "epicormic.201.salida.1",
+                       "epicormic.201.salida.2",
+                       "epicormic.201.salida.3",
+                       "epicormic.201.salida.4")
+
+for (x in seq_along(chr_list)) {
+  for (y in seq_along(samples_epicormic_8.201)) {
+    
+    profile <- computeMethylationProfile(
+      samples_epicormic_8.201[[y]],    
+      chr_list[[x]],         
+      windowSize = 100000,
+      context = "CG"
+    )
+    
+    object_name <- paste0(names(samples_epicormic_8.201)[y], ".", chr_names[x])
+    
+    assign(object_name, profile, envir = .GlobalEnv)
+  }
+}
+
+tissue_types <- c("epicormic","epicormic","epicormic","epicormic",
+                  "epicormic","epicormic","epicormic","epicormic",
+                  "epicormic","epicormic","epicormic","epicormic",
+                  "epicormic","epicormic","epicormic","epicormic")
+
+locations <- c("billings","billings", "billings", "billings",
+               "chico","chico", "chico","chico",
+               "chowchilla", "chowchilla", "chowchilla", "chowchilla",
+               "salida", "salida", "salida", "salida",
+               "billings","billings", "billings", "billings",
+               "chico","chico","chico","chico",
+                "chowchilla","chowchilla", "chowchilla", "chowchilla",
+               "salida", "salida", "salida", "salida")
+
+reps<- c("1", "2", "3", "4",
+         "1", "2", "3", "4",
+         "1", "2", "3", "4",
+         "1", "2", "3", "4")
+
+sample_names <-  c("epicormic.201.billings.1", 
+                     "epicormic.201.billings.2",
+                     "epicormic.201.billings.3",
+                     "epicormic.201.billings.4",
+                     "epicormic.201.chico.1",
+                     "epicormic.201.chico.2",
+                     "epicormic.201.chico.3",
+                     "epicormic.201.chico.4",
+                     "epicormic.201.chowchilla.1",
+                       "epicormic.201.chowchilla.2",
+                       "epicormic.201.chowchilla.3",
+                       "epicormic.201.chowchilla.4",
+                     "epicormic.201.salida.1",
+                       "epicormic.201.salida.2",
+                       "epicormic.201.salida.3",
+                       "epicormic.201.salida.4")
+
+
+
+# Loop through each sample in the samples_8.160 list
+for (i in seq_along(samples_epicormic_8.201)) {
+
+  # Combine the chromosomes for the current sample
+  sample_object <- do.call(c, lapply(chr_names, function(chr) {
+    get(paste0(sample_names[i], ".", chr))
+  }))
+  
+  # Convert to data frame
+  CpG_df <- as.data.frame(sample_object)
+  
+  # Add treatment group metadata (tissue, location, variety)
+  CpG_df <- CpG_df %>%
+    mutate(tissue = tissue_types[i], 
+           location = locations[i], 
+           rep = reps[i],
+           variety = "8_201")
+  
+  # Assign the data frame to a global variable with a dynamic name
+  object_name <- paste0(sample_names[i], ".df")
+  assign(object_name, CpG_df, envir = .GlobalEnv)
+  
+}
+
+save(epicormic.201.billings.1.df, epicormic.201.billings.2.df, epicormic.201.billings.3.df, epicormic.201.billings.4.df,
+     epicormic.201.chico.1.df, epicormic.201.chico.2.df, epicormic.201.chico.3.df, epicormic.201.chico.4.df,
+     epicormic.201.chowchilla.1.df, epicormic.201.chowchilla.2.df, epicormic.201.chowchilla.3.df, epicormic.201.chowchilla.4.df,
+     epicormic.201.salida.1.df, epicormic.201.salida.2.df, epicormic.201.salida.3.df, epicormic.201.salida.4.df,
+     file = "epicormic_201_kb_windows.Rdata")
+
+```
+
+```{r}
+load("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report/axillary_160.Rdata")
+
+samples_axillary_8.160<- list(axillary.160.billings.1, 
+                     axillary.160.billings.2,
+                     axillary.160.billings.3,
+                     axillary.160.billings.4,
+                     axillary.160.chico.1,
+                     axillary.160.chico.2,
+                     axillary.160.chico.3,
+                     axillary.160.chico.4,
+                     axillary.160.chowchilla.1,
+                       axillary.160.chowchilla.2,
+                       axillary.160.chowchilla.3,
+                       axillary.160.chowchilla.4,
+                     axillary.160.salida.1,
+                       axillary.160.salida.2,
+                       axillary.160.salida.3,
+                       axillary.160.salida.4)
+                     
+                       
+names(samples_axillary_8.160) <- c("axillary.160.billings.1", 
+                     "axillary.160.billings.2",
+                     "axillary.160.billings.3",
+                     "axillary.160.billings.4",
+                     "axillary.160.chico.1",
+                     "axillary.160.chico.2",
+                     "axillary.160.chico.3",
+                     "axillary.160.chico.4",
+                     "axillary.160.chowchilla.1",
+                       "axillary.160.chowchilla.2",
+                       "axillary.160.chowchilla.3",
+                       "axillary.160.chowchilla.4",
+                     "axillary.160.salida.1",
+                       "axillary.160.salida.2",
+                       "axillary.160.salida.3",
+                       "axillary.160.salida.4")
+
+for (x in seq_along(chr_list)) {
+  for (y in seq_along(samples_axillary_8.160)) {
+    
+    profile <- computeMethylationProfile(
+      samples_axillary_8.160[[y]],    
+      chr_list[[x]],         
+      windowSize = 100000,
+      context = "CG"
+    )
+    
+    object_name <- paste0(names(samples_axillary_8.160)[y], ".", chr_names[x])
+    
+    assign(object_name, profile, envir = .GlobalEnv)
+  }
+}
+
+tissue_types <- c("axillary", "axillary", "axillary", "axillary", 
+                  "axillary", "axillary", "axillary", "axillary",
+                  "axillary", "axillary", "axillary", "axillary",
+                  "axillary", "axillary", "axillary", "axillary")
+
+locations <- c("billings","billings", "billings", "billings",
+               "chico","chico", "chico","chico",
+               "chowchilla", "chowchilla", "chowchilla", "chowchilla",
+               "salida", "salida", "salida", "salida",
+               "billings","billings", "billings", "billings",
+               "chico","chico","chico","chico",
+                "chowchilla","chowchilla", "chowchilla", "chowchilla",
+               "salida", "salida", "salida", "salida")
+
+reps<- c("1", "2", "3", "4",
+         "1", "2", "3", "4",
+         "1", "2", "3", "4",
+         "1", "2", "3", "4")
+
+sample_names <-  c("axillary.160.billings.1", 
+                     "axillary.160.billings.2",
+                     "axillary.160.billings.3",
+                     "axillary.160.billings.4",
+                     "axillary.160.chico.1",
+                     "axillary.160.chico.2",
+                     "axillary.160.chico.3",
+                     "axillary.160.chico.4",
+                     "axillary.160.chowchilla.1",
+                       "axillary.160.chowchilla.2",
+                       "axillary.160.chowchilla.3",
+                       "axillary.160.chowchilla.4",
+                     "axillary.160.salida.1",
+                       "axillary.160.salida.2",
+                       "axillary.160.salida.3",
+                       "axillary.160.salida.4")
+
+
+
+# Loop through each sample in the samples_8.160 list
+for (i in seq_along(samples_axillary_8.160)) {
+
+  # Combine the chromosomes for the current sample
+  sample_object <- do.call(c, lapply(chr_names, function(chr) {
+    get(paste0(sample_names[i], ".", chr))
+  }))
+  
+  # Convert to data frame
+  CpG_df <- as.data.frame(sample_object)
+  
+  # Add treatment group metadata (tissue, location, variety)
+  CpG_df <- CpG_df %>%
+    mutate(tissue = tissue_types[i], 
+           location = locations[i], 
+           rep = reps[i],
+           variety = "8_160")
+  
+  # Assign the data frame to a global variable with a dynamic name
+  object_name <- paste0(sample_names[i], ".df")
+  assign(object_name, CpG_df, envir = .GlobalEnv)
+  
+}
+
+save(axillary.160.billings.1.df, axillary.160.billings.2.df, axillary.160.billings.3.df, axillary.160.billings.4.df,
+     axillary.160.chico.1.df, axillary.160.chico.2.df, axillary.160.chico.3.df, axillary.160.chico.4.df,
+     axillary.160.chowchilla.1.df, axillary.160.chowchilla.2.df, axillary.160.chowchilla.3.df, axillary.160.chowchilla.4.df,
+     axillary.160.salida.1.df, axillary.160.salida.2.df, axillary.160.salida.3.df, axillary.160.salida.4.df,
+     file = "axillary_160_kb_windows.Rdata")
+
+   
+load("/fs/scratch/PAS1755/Will/EpiAxi/Visualization/In_DMRcaller/context_report/epicormic_160.RData")
+
+samples_epicormic_8.160<- list(epicormic.160.billings.1, 
+                     epicormic.160.billings.2,
+                     epicormic.160.billings.3,
+                     epicormic.160.billings.4,
+                     epicormic.160.chico.1,
+                     epicormic.160.chico.2,
+                     epicormic.160.chico.3,
+                     epicormic.160.chico.4,
+                     epicormic.160.chowchilla.1,
+                       epicormic.160.chowchilla.2,
+                       epicormic.160.chowchilla.3,
+                       epicormic.160.chowchilla.4,
+                     epicormic.160.salida.1,
+                       epicormic.160.salida.2,
+                       epicormic.160.salida.3,
+                       epicormic.160.salida.4)
+                     
+                       
+names(samples_epicormic_8.160) <- c("epicormic.160.billings.1", 
+                     "epicormic.160.billings.2",
+                     "epicormic.160.billings.3",
+                     "epicormic.160.billings.4",
+                     "epicormic.160.chico.1",
+                     "epicormic.160.chico.2",
+                     "epicormic.160.chico.3",
+                     "epicormic.160.chico.4",
+                     "epicormic.160.chowchilla.1",
+                       "epicormic.160.chowchilla.2",
+                       "epicormic.160.chowchilla.3",
+                       "epicormic.160.chowchilla.4",
+                     "epicormic.160.salida.1",
+                       "epicormic.160.salida.2",
+                       "epicormic.160.salida.3",
+                       "epicormic.160.salida.4")
+
+for (x in seq_along(chr_list)) {
+  for (y in seq_along(samples_epicormic_8.160)) {
+    
+    profile <- computeMethylationProfile(
+      samples_epicormic_8.160[[y]],    
+      chr_list[[x]],         
+      windowSize = 100000,
+      context = "CG"
+    )
+    
+    object_name <- paste0(names(samples_epicormic_8.160)[y], ".", chr_names[x])
+    
+    assign(object_name, profile, envir = .GlobalEnv)
+  }
+}
+
+tissue_types <- c("epicormic","epicormic","epicormic","epicormic",
+                  "epicormic","epicormic","epicormic","epicormic",
+                  "epicormic","epicormic","epicormic","epicormic",
+                  "epicormic","epicormic","epicormic","epicormic")
+
+locations <- c("billings","billings", "billings", "billings",
+               "chico","chico", "chico","chico",
+               "chowchilla", "chowchilla", "chowchilla", "chowchilla",
+               "salida", "salida", "salida", "salida",
+               "billings","billings", "billings", "billings",
+               "chico","chico","chico","chico",
+                "chowchilla","chowchilla", "chowchilla", "chowchilla",
+               "salida", "salida", "salida", "salida")
+
+reps<- c("1", "2", "3", "4",
+         "1", "2", "3", "4",
+         "1", "2", "3", "4",
+         "1", "2", "3", "4")
+
+sample_names <-  c("epicormic.160.billings.1", 
+                     "epicormic.160.billings.2",
+                     "epicormic.160.billings.3",
+                     "epicormic.160.billings.4",
+                     "epicormic.160.chico.1",
+                     "epicormic.160.chico.2",
+                     "epicormic.160.chico.3",
+                     "epicormic.160.chico.4",
+                     "epicormic.160.chowchilla.1",
+                       "epicormic.160.chowchilla.2",
+                       "epicormic.160.chowchilla.3",
+                       "epicormic.160.chowchilla.4",
+                     "epicormic.160.salida.1",
+                       "epicormic.160.salida.2",
+                       "epicormic.160.salida.3",
+                       "epicormic.160.salida.4")
+
+
+
+# Loop through each sample in the samples_8.160 list
+for (i in seq_along(samples_epicormic_8.160)) {
+
+  # Combine the chromosomes for the current sample
+  sample_object <- do.call(c, lapply(chr_names, function(chr) {
+    get(paste0(sample_names[i], ".", chr))
+  }))
+  
+  # Convert to data frame
+  CpG_df <- as.data.frame(sample_object)
+  
+  # Add treatment group metadata (tissue, location, variety)
+  CpG_df <- CpG_df %>%
+    mutate(tissue = tissue_types[i], 
+           location = locations[i], 
+           rep = reps[i],
+           variety = "8_160")
+  
+  # Assign the data frame to a global variable with a dynamic name
+  object_name <- paste0(sample_names[i], ".df")
+  assign(object_name, CpG_df, envir = .GlobalEnv)
+  
+}
+
+save(epicormic.160.billings.1.df, epicormic.160.billings.2.df, epicormic.160.billings.3.df, epicormic.160.billings.4.df,
+     epicormic.160.chico.1.df, epicormic.160.chico.2.df, epicormic.160.chico.3.df, epicormic.160.chico.4.df,
+     epicormic.160.chowchilla.1.df, epicormic.160.chowchilla.2.df, epicormic.160.chowchilla.3.df, epicormic.160.chowchilla.4.df,
+     epicormic.160.salida.1.df, epicormic.160.salida.2.df, epicormic.160.salida.3.df, epicormic.160.salida.4.df,
+     file = "epicormic_160_kb_windows.Rdata")
+
+```
+
