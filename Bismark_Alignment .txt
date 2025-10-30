@@ -226,20 +226,21 @@ do
  echo '#SBATCH --exclusive'
 
 
- echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/3_Alignment/Bismark_Alignment_pUC19_Out'
- echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
- bismark --genome /fs/scratch/PAS1755/Will/EpiAxi/Genomes/pUC19 --parallel 28 \
+ echo 'cd /path/to/3_Alignment/Bismark_Alignment_pUC19_Out'
+ echo "apptainer exec ../Software/bismark.sif \
+ bismark --genome /path/to/Genomes/pUC19 --parallel 28 \
   -1 $R1 -2 $R2
 "
  } > bismark_pUC19_alignment_$ID1.sh
  sbatch bismark_pUC19_alignment_$ID1.sh
 done < list1.txt 3< list2.txt
 =====================================================
+#deduplicate before methylation calling 
 
 # 6. Deduplication
 cd ../..
 cd 6_Deduplication
-ls /fs/scratch/PAS1755/Will/EpiAxi/5_Alignment/Bismark_Alignment_Almond_Out/*pe.bam | sort > list.txt
+ls /path/to/5_Alignment/Bismark_Alignment_Almond_Out/*pe.bam | sort > list.txt
 
 while IFS= read R1
 do
@@ -251,20 +252,21 @@ do
  echo '#SBATCH --time=00:10:00'
  echo '#SBATCH --ntasks=28'
  echo '#SBATCH --exclusive'
- echo '#SBATCH --mail-type=BEGIN,END,FAIL'
- echo '#SBATCH --account=PAS1755'
 
- echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/5_Alignment/Bismark_Alignment_Almond_Out/'
- echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
- deduplicate_bismark $R1 --paired -o $ID1 --output_dir /fs/scratch/PAS1755/Will/EpiAxi/6_Deduplication/"
+
+ echo 'cd /path/to/EpiAxi/5_Alignment/Bismark_Alignment_Almond_Out/'
+ echo "apptainer exec ../Software/bismark.sif \
+ deduplicate_bismark $R1 --paired -o $ID1 --output_dir /path/to/6_Deduplication/"
 } > deduplicate_$ID1.sh
  sbatch deduplicate_$ID1.sh
 done < list.txt
 =====================================================
+#call methylation
+
 # 7. Methylation calling
 cd ..
 cd 7_Methylation
-ls /fs/scratch/PAS1755/Will/EpiAxi/6_Deduplication/*deduplicated.bam | sort > list_dedup.txt
+ls path/to/6_Deduplication/*deduplicated.bam | sort > list_dedup.txt
 
 
 while IFS= read R1
@@ -278,50 +280,13 @@ do
  echo '#SBATCH --job-name=Methylation_calling'
  echo '#SBATCH --time=04:00:00'
  echo '#SBATCH --ntasks=28'
- echo '#SBATCH --exclusive'
- echo '#SBATCH --mail-type=BEGIN,END,FAIL'
- echo '#SBATCH --account=PAS1755'
+'
 
- echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/7_Methylation/'
- echo "apptainer exec /fs/scratch/PAS1755/Will/EpiAxi/Software/bismark.sif \
- bismark_methylation_extractor $R1 --comprehensive --multicore 40 --cytosine_report --CX_context \
-    --genome_folder /fs/scratch/PAS1755/Will/EpiAxi/Genomes/Almond"
+ echo 'cd path/to/7_Methylation/'
+ echo "apptainer exec ../Software/bismark.sif \
+ bismark_methylation_extractor $R1 --comprehensive --multicore 28 --cytosine_report --CX_context \
+    --genome_folder /path/to/Genomes/Almond"
 } > methylation_extract_$ID1.sh
  sbatch methylation_extract_$ID1.sh
 done < list_dedup.txt
 ------------------------------------------------------------------------------------------------------------------------------------------
-
- 8 DMR calling
-cd ..
-cd 8_DMR_calling
-mkdir in_DSS in_MethylKit in_MethylPy
-------------------------------------------------------------------------------------------------------------------------------------------
-# Using DSS
-cd in_DSS
-mkdir DSS_Analysis
-ls /fs/scratch/PAS1755/Will/EpiAxi/7_Methylation/*CX_report.txt | sort > list_CX.txt
-
-# Getting files for each context
-while IFS= read R1
-do
- ID1=`echo $R1 | xargs basename | sed -E 's/_S.+\.deduplicated.CX_report\.txt//'`
- {
- echo '#!/bin/bash'
- echo '#SBATCH -J ondemand/sys/myjobs/basic_sequential'
- echo '#SBATCH --job-name=CX_files'
- echo '#SBATCH --time=00:05:00'
- echo '#SBATCH --ntasks=1'
- echo '#SBATCH --exclusive'
- echo '#SBATCH --mail-type=END,FAIL'
- echo '#SBATCH --account=PAS1755'
-
- echo 'cd /fs/scratch/PAS1755/Will/EpiAxi/8_DMR_calling/in_DSS/'
- echo "awk '{ if(\$6 == \"CG\") {print \$1, \$2, \$4+\$5, \$4}}' $R1 > DSS_Analysis/$ID1.CpG.DSS.txt && \
- awk '{ if(\$6 == \"CHG\") {print \$1, \$2, \$4+\$5, \$4}}' $R1 > DSS_Analysis/$ID1.CHG.DSS.txt && \
- awk '{ if(\$6 == \"CHH\") {print \$1, \$2, \$4+\$5, \$4}}' $R1 > DSS_Analysis/$ID1.CHH.DSS.txt"
-} > CX_$ID1.sh
- sbatch CX_$ID1.sh
-done < list_CX.txt
-------------------------------------------------------------------------------------------------------------------------------------------
-
-
